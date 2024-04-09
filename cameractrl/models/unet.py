@@ -40,6 +40,9 @@ from cameractrl.models.resnet import (
     FusionBlock2D
 )
 
+from cameractrl.models.attention import EpipolarTransformerBlock
+
+
 @dataclass
 class UNet3DConditionOutput(BaseOutput):
     sample: torch.FloatTensor
@@ -97,9 +100,15 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
 
             # whether fuse first frame's feature
             fuse_first_frame: bool = False,
+
+            # epipolar
+            num_epipolar_layers: Union[int, Tuple[int]] = (2, 2, 2, 0),
     ):
         super().__init__()
         self.logger = logging.get_logger(__name__)
+
+        self.num_epipolar_layers = num_epipolar_layers
+        self.epipolar = nn.ModuleList([])
 
         self.sample_size = sample_size
         time_embed_dim = block_out_channels[0] * 4
@@ -197,6 +206,20 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
             self.down_blocks.append(down_block)
             self.down_fusers.append(down_fuser)
 
+            if self.num_epipolar_layers[i]:
+                tmp_epipolar = nn.ModuleList([])
+                for _ in range(self.num_epipolar_layers[i]):
+                    tmp_epipolar.append(
+                        EpipolarTransformerBlock(
+                            attention_head_dim[i] * output_channel // attention_head_dim[i],
+                            attention_head_dim[i],
+                            output_channel // attention_head_dim[i],
+                        )
+                    )
+            else:
+                tmp_epipolar = None
+            self.epipolar.append(tmp_epipolar)
+        
         # mid
         if mid_block_type == "UNetMidBlock3DCrossAttn":
             self.mid_block = UNetMidBlock3DCrossAttn(
