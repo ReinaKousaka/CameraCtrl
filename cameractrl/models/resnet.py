@@ -15,8 +15,6 @@ from diffusers.models.attention_processor import SpatialNorm
 
 class InflatedConv3d(nn.Conv2d):
     def forward(self, x):
-        x = x.half()
-
         video_length = x.shape[2]
 
         x = rearrange(x, "b c f h w -> (b f) c h w")
@@ -28,7 +26,6 @@ class InflatedConv3d(nn.Conv2d):
 
 class InflatedGroupNorm(nn.GroupNorm):
     def forward(self, x):
-        x = x.half()
         # return super().forward(x)
 
         video_length = x.shape[2]
@@ -43,7 +40,7 @@ def zero_module(module):
     # Zero out the parameters of a module and return it.
     for p in module.parameters():
         p.detach().zero_()
-    return module.half()
+    return module
 
 
 class FusionBlock2D(nn.Module):
@@ -191,10 +188,6 @@ class FusionBlock2D(nn.Module):
         # init_hidden_state:  b c   1   h w
         # post_hidden_states: b c (f-1) h w
 
-        init_hidden_state = init_hidden_state.half()
-        post_hidden_states = post_hidden_states.half()
-        temb = temb.half()
-
         video_length = post_hidden_states.shape[2]
         repeated_init_hidden_state = repeat(init_hidden_state, "b c f h w -> b c (n f) h w", n=video_length)
 
@@ -276,11 +269,9 @@ class Upsample3D(nn.Module):
         if use_conv_transpose:
             raise NotImplementedError
         elif use_conv:
-            self.conv = InflatedConv3d(self.channels, self.out_channels, 3, padding=1).half()
+            self.conv = InflatedConv3d(self.channels, self.out_channels, 3, padding=1)
 
     def forward(self, hidden_states, output_size=None):
-        hidden_states = hidden_states.half()
-        
         assert hidden_states.shape[1] == self.channels
 
         if self.use_conv_transpose:
@@ -313,7 +304,7 @@ class Upsample3D(nn.Module):
         #         hidden_states = self.Conv2d_0(hidden_states)
         hidden_states = self.conv(hidden_states)
 
-        return hidden_states.half()
+        return hidden_states
 
 
 class Downsample3D(nn.Module):
@@ -332,8 +323,6 @@ class Downsample3D(nn.Module):
             raise NotImplementedError
 
     def forward(self, hidden_states):
-        hidden_states = hidden_states.half()
-
         assert hidden_states.shape[1] == self.channels
         if self.use_conv and self.padding == 0:
             raise NotImplementedError
@@ -341,7 +330,7 @@ class Downsample3D(nn.Module):
         assert hidden_states.shape[1] == self.channels
         hidden_states = self.conv(hidden_states)
 
-        return hidden_states.half()
+        return hidden_states
 
 
 class ResnetBlock3D(nn.Module):
@@ -410,7 +399,6 @@ class ResnetBlock3D(nn.Module):
 
     def forward(self, input_tensor, temb):
         # input: b c f h w
-        input_tensor = input_tensor.half()
 
         hidden_states = input_tensor
 
@@ -426,12 +414,12 @@ class ResnetBlock3D(nn.Module):
             temb = self.time_emb_proj(self.nonlinearity(temb))[:, :, None, None, None]
 
         if temb is not None and self.time_embedding_norm == "default":
-            hidden_states = hidden_states + temb.half()
+            hidden_states = hidden_states + temb
 
         hidden_states = self.norm2(hidden_states)
 
         if temb is not None and self.time_embedding_norm == "scale_shift":
-            scale, shift = torch.chunk(temb.half(), 2, dim=1)
+            scale, shift = torch.chunk(temb, 2, dim=1)
             hidden_states = hidden_states * (1 + scale) + shift
 
         hidden_states = self.nonlinearity(hidden_states)
@@ -449,5 +437,4 @@ class ResnetBlock3D(nn.Module):
 
 class Mish(torch.nn.Module):
     def forward(self, hidden_states):
-        hidden_states = hidden_states.half()
         return hidden_states * torch.tanh(torch.nn.functional.softplus(hidden_states))
