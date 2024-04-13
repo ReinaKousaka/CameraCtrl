@@ -404,6 +404,9 @@ class CrossAttnDownBlock3D(nn.Module):
                 hidden_states = rearrange(hidden_states, "(b f) c h w -> b c f h w", f=video_length)
 
                 hidden_states = rearrange(hidden_states, "b c f h w -> (b f) c h w")
+                print(f'in unetblocks -- hidden_states: {hidden_states.shape}')
+                print(f'in unetblocks -- encoder_hidden_states: {encoder_hidden_states.shape}')
+                print(f'attn is {attn}')
                 hidden_states = attn(hidden_states, encoder_hidden_states=encoder_hidden_states,
                                      cross_attention_kwargs=cross_attention_kwargs).sample
                 hidden_states = rearrange(hidden_states, "(b f) c h w -> b c f h w", f=video_length)

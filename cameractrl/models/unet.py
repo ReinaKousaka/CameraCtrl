@@ -1049,7 +1049,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
             motion_module_alphas: Union[tuple, float] = 1.0,
             debug: bool = False,
     ) -> Union[UNet3DConditionOutput, Tuple]:
-
+        print(f'forward in unet')
         activations = {}
 
         default_overall_up_factor = 2 ** self.num_upsamplers
@@ -1138,6 +1138,9 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                                                                                              self.down_fusers[1:],
                                                                                              motion_module_alphas[:-1]):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
+                print(f'in unet.py -- hidden_states: {sample.shape}')
+                print(f'in unet.py -- temb: {emb.shape}')
+                print(f'in unet.py -- encoder_hidden_states: {encoder_hidden_states.shape}')
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
                     temb=emb,
