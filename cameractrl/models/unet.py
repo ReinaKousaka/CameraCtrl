@@ -1132,6 +1132,8 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
         video_length = sample.shape[2]
         encoder_hidden_states = repeat(encoder_hidden_states, "b n c -> (b f) n c", f=video_length)
 
+        image_only_indicator = torch.zeros(sample[0], sample[2], dtype=sample.dtype, device=sample.device)
+
         # pre-process
         sample = self.conv_in(sample)           # b c f h w
         activations["conv_in_out"] = sample
@@ -1192,6 +1194,14 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                     res_samples = list(res_samples)
                     res_samples[sample_idx] = torch.cat([res_samples[sample_idx][:, :, :1], fused_sample], dim=2)
                     res_samples = tuple(res_samples)
+            
+            if self.epipolar[i]:
+                for epipolar_block in self.epipolar[i]:
+                    sample = epipolar_block(
+                        sample,
+                        attention_mask=attention_mask[i],
+                        image_only_indicator=image_only_indicator,
+                    )
 
             down_block_res_samples += res_samples
 
