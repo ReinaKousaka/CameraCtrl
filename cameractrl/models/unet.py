@@ -40,6 +40,9 @@ from cameractrl.models.resnet import (
     FusionBlock2D
 )
 
+from cameractrl.models.attention import EpipolarTransformerBlock
+
+
 @dataclass
 class UNet3DConditionOutput(BaseOutput):
     sample: torch.FloatTensor
@@ -97,9 +100,15 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
 
             # whether fuse first frame's feature
             fuse_first_frame: bool = False,
+
+            # epipolar
+            num_epipolar_layers: Union[int, Tuple[int]] = (2, 2, 2, 0),
     ):
         super().__init__()
         self.logger = logging.get_logger(__name__)
+
+        self.num_epipolar_layers = num_epipolar_layers
+        self.epipolar = nn.ModuleList([])
 
         self.sample_size = sample_size
         time_embed_dim = block_out_channels[0] * 4
@@ -197,6 +206,20 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
             self.down_blocks.append(down_block)
             self.down_fusers.append(down_fuser)
 
+            if self.num_epipolar_layers[i]:
+                tmp_epipolar = nn.ModuleList([])
+                for _ in range(self.num_epipolar_layers[i]):
+                    tmp_epipolar.append(
+                        EpipolarTransformerBlock(
+                            attention_head_dim[i] * output_channel // attention_head_dim[i],
+                            attention_head_dim[i],
+                            output_channel // attention_head_dim[i],
+                        )
+                    )
+            else:
+                tmp_epipolar = None
+            self.epipolar.append(tmp_epipolar)
+        
         # mid
         if mid_block_type == "UNetMidBlock3DCrossAttn":
             self.mid_block = UNetMidBlock3DCrossAttn(
@@ -948,6 +971,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                 else:
                     spatial_attn_procs[name] = CustomizedAttnProcessor()
         elif (not add_spatial) and add_spatial_lora:
+            print(f'attn_processors keys: {self.attn_processors.keys()}')
             for name in self.attn_processors.keys():
                 cross_attention_dim = None if name.endswith("attn1.processor") else self.config.cross_attention_dim
                 if name.startswith("mid_block"):
@@ -958,6 +982,11 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                 elif name.startswith("down_blocks"):
                     block_id = int(name[len("down_blocks.")])
                     hidden_size = self.config.block_out_channels[block_id]
+                elif name.startswith("epipolar"):
+                    # block_id = int(name[len('epipolar.')])
+                    # hidden_size = self.config.
+                    spatial_attn_procs[name] = CustomizedAttnProcessor()
+                    continue
 
                 spatial_attn_procs[name] = CustomizedLoRAAttnProcessor(
                     hidden_size=hidden_size,
@@ -1049,7 +1078,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
             motion_module_alphas: Union[tuple, float] = 1.0,
             debug: bool = False,
     ) -> Union[UNet3DConditionOutput, Tuple]:
-        print(f'forward in unet')
+
         activations = {}
 
         default_overall_up_factor = 2 ** self.num_upsamplers
@@ -1109,9 +1138,12 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
         video_length = sample.shape[2]
         encoder_hidden_states = repeat(encoder_hidden_states, "b n c -> (b f) n c", f=video_length)
 
+        image_only_indicator = torch.zeros(sample.shape[0], sample.shape[2], dtype=sample.dtype, device=sample.device)
+
         # pre-process
         sample = self.conv_in(sample)           # b c f h w
         activations["conv_in_out"] = sample
+        print(f'sample shape {sample.shape}')
 
         # to be fused
         if self.down_fusers[0] != None:
@@ -1123,7 +1155,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                 temb=emb_single,
             )
             sample = torch.cat([sample[:, :, :1], fused_sample], dim=2)
-
+        print(f'sample shape {sample.shape}')
         activations["conv_in_fuse_out"] = sample
 
         # down
@@ -1133,14 +1165,15 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
         if isinstance(motion_module_alphas, float):
             motion_module_alphas = (motion_module_alphas,) * 5
 
+        # print(f'down fuser: {self.down_fusers[1:]}')
+        # print(f'mm alpha: {motion_module_alphas[:-1]}')
+        i = -1
         for downsample_block, pose_embedding_feature, down_fuser, motion_module_alpha in zip(self.down_blocks,
                                                                                              pose_embedding_features,
                                                                                              self.down_fusers[1:],
                                                                                              motion_module_alphas[:-1]):
+            i += 1
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
-                print(f'in unet.py -- hidden_states: {sample.shape}')
-                print(f'in unet.py -- temb: {emb.shape}')
-                print(f'in unet.py -- encoder_hidden_states: {encoder_hidden_states.shape}')
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
                     temb=emb,
@@ -1172,6 +1205,15 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                     res_samples = list(res_samples)
                     res_samples[sample_idx] = torch.cat([res_samples[sample_idx][:, :, :1], fused_sample], dim=2)
                     res_samples = tuple(res_samples)
+            print(f'attn mask: {attention_mask}')
+            if self.epipolar[i]:
+                for epipolar_block in self.epipolar[i]:
+                    sample = epipolar_block(
+                        sample,
+                        # attention_mask=attention_mask[i],
+                        attention_mask=attention_mask,
+                        image_only_indicator=image_only_indicator,
+                    )
 
             down_block_res_samples += res_samples
 

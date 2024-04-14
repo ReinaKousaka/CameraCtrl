@@ -366,6 +366,8 @@ def main(name: str,
     # Support mixed-precision training
     scaler = torch.cuda.amp.GradScaler() if mixed_precision_training else None
 
+    train_batch_size = 1
+    T = 8
     for epoch in range(first_epoch, num_train_epochs):
         # train_dataloader.sampler.set_epoch(epoch)
         pose_adaptor.train()
@@ -381,7 +383,7 @@ def main(name: str,
 
             # Data batch sanity check
             if epoch == first_epoch and step == 0 and do_sanity_check:
-                pixel_values = torch.rand(train_batch_size, 16, 3, 256, 384)
+                pixel_values = torch.zeros(train_batch_size, T, 3, 256, 384)
                 texts = 'text'
                 
                 # pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
@@ -396,7 +398,7 @@ def main(name: str,
             print('start training')
             # Convert videos to latent space
             # pixel_values = batch["pixel_values"].to(local_rank)
-            pixel_values = torch.rand(train_batch_size, 16, 3, 256, 384).to(local_rank) 
+            pixel_values = torch.zeros(train_batch_size, T, 3, 256, 384).to(local_rank) 
 
             video_length = pixel_values.shape[1]
             with torch.no_grad():
@@ -424,11 +426,13 @@ def main(name: str,
                     texts, max_length=tokenizer.model_max_length, padding="max_length", truncation=True,
                     return_tensors="pt"
                 ).input_ids.to(latents.device)
-                encoder_hidden_states = text_encoder(prompt_ids)[0]  # b l c
+                # encoder_hidden_states = text_encoder(prompt_ids)[0]  # b l c
+                encoder_hidden_states = torch.zeros(train_batch_size, 77, 768).to(device=local_rank)
 
             # Predict the noise residual and compute loss
             # Mixed-precision training
-            plucker_embedding = torch.rand(train_batch_size, 16,6,256,368).to(device=local_rank)
+            plucker_embedding = torch.rand(
+                train_batch_size, T,6,256,384).to(device=local_rank)
             # plucker_embedding = batch["plucker_embedding"].to(device=local_rank)  # [b, f, 6, h, w]
             plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f h, w]
             print(f'random plucker')
