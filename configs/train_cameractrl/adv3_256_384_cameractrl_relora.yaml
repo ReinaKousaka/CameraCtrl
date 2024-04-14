@@ -1,6 +1,6 @@
 
 output_dir: "output/cameractrl_model"
-pretrained_model_path: "[replace with SD1.5 root path]"
+pretrained_model_path: "./stable-diffusion-v1-5"
 unet_subfolder: "unet_webvidlora_v3"
 
 train_data:
@@ -46,8 +46,8 @@ unet_additional_kwargs:
 
 lora_rank: 2
 lora_scale: 1.0
-lora_ckpt: "[Replace with RealEstate10k image LoRA ckpt]"
-motion_module_ckpt: "[Replace with ADV3 motion module]"
+lora_ckpt: "./RealEstate10K_LoRA.ckpt"
+motion_module_ckpt: "./v3_sd15_mm.ckpt"
 
 pose_encoder_kwargs:
   downscale_factor: 8
