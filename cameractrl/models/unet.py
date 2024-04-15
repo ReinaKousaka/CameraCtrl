@@ -1143,7 +1143,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
         # pre-process
         sample = self.conv_in(sample)           # b c f h w
         activations["conv_in_out"] = sample
-        print(f'sample shape {sample.shape}')
+        # print(f'sample shape {sample.shape}')
 
         # to be fused
         if self.down_fusers[0] != None:
@@ -1155,7 +1155,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                 temb=emb_single,
             )
             sample = torch.cat([sample[:, :, :1], fused_sample], dim=2)
-        print(f'sample shape {sample.shape}')
+        # print(f'sample shape {sample.shape}')
         activations["conv_in_fuse_out"] = sample
 
         # down
@@ -1205,15 +1205,17 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                     res_samples = list(res_samples)
                     res_samples[sample_idx] = torch.cat([res_samples[sample_idx][:, :, :1], fused_sample], dim=2)
                     res_samples = tuple(res_samples)
-            print(f'attn mask: {attention_mask}')
+
             if self.epipolar[i]:
                 for epipolar_block in self.epipolar[i]:
+                    print(f'passing sample into epipolar: sample shape {sample.shape}')
                     sample = epipolar_block(
                         sample,
                         # attention_mask=attention_mask[i],
                         attention_mask=attention_mask,
                         image_only_indicator=image_only_indicator,
                     )
+                    print(f'getting sample out of epipolar: sample shape {sample.shape}')
 
             down_block_res_samples += res_samples
 

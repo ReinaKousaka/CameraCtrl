@@ -395,7 +395,7 @@ def main(name: str,
                     #                  rescale=True)
 
             ### >>>> Training >>>> ###
-            print('start training')
+
             # Convert videos to latent space
             # pixel_values = batch["pixel_values"].to(local_rank)
             pixel_values = torch.zeros(train_batch_size, T, 3, 256, 384).to(local_rank) 
@@ -419,7 +419,7 @@ def main(name: str,
             # Add noise to the latents according to the noise magnitude at each timestep
             # (this is the forward diffusion process)
             noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)  # [b, c, f h, w]
-            print('after noisy latent')
+
             # Get the text embedding for conditioning
             with torch.no_grad():
                 prompt_ids = tokenizer(
@@ -427,7 +427,8 @@ def main(name: str,
                     return_tensors="pt"
                 ).input_ids.to(latents.device)
                 # encoder_hidden_states = text_encoder(prompt_ids)[0]  # b l c
-                encoder_hidden_states = torch.zeros(train_batch_size, 77, 768).to(device=local_rank)
+                encoder_hidden_states = torch.zeros(
+                    train_batch_size, 77, 768).to(device=local_rank)
 
             # Predict the noise residual and compute loss
             # Mixed-precision training
@@ -435,7 +436,7 @@ def main(name: str,
                 train_batch_size, T,6,256,384).to(device=local_rank)
             # plucker_embedding = batch["plucker_embedding"].to(device=local_rank)  # [b, f, 6, h, w]
             plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f h, w]
-            print(f'random plucker')
+
             with torch.cuda.amp.autocast(enabled=mixed_precision_training):
                 print(f'noisy_latents: {noisy_latents.shape}')
                 print(f'timesteps: {timesteps}')

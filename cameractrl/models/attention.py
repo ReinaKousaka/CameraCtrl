@@ -472,7 +472,10 @@ class EpipolarTransformerBlock(nn.Module):
 
         # batch_size, num_frames, height, width = hidden_states.shape
 
-        hidden_states = rearrange(hidden_states, "b f c h w -> b (f h w) c", b = batch_size)
+        # TODO: confirm the shape
+        # hidden_states = rearrange(hidden_states, "b f c h w -> b (f h w) c", b = batch_size)
+        hidden_states = rearrange(hidden_states, "b c f h w -> b (f h w) c", b = batch_size)
+
 
         if self.use_ada_layer_norm:
             norm_hidden_states = self.norm1(hidden_states, timestep)
@@ -481,6 +484,7 @@ class EpipolarTransformerBlock(nn.Module):
                 hidden_states, timestep, class_labels, hidden_dtype=hidden_states.dtype
             )
         elif self.use_layer_norm:
+            print(f'EpipolarBlock: hidden_states = {hidden_states.shape}')
             norm_hidden_states = self.norm1(hidden_states)
         elif self.use_ada_layer_norm_single:
             shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
@@ -617,7 +621,11 @@ class EpipolarTransformerBlock(nn.Module):
             ff_output = gate_mlp * ff_output
 
         hidden_states = ff_output + hidden_states
+
         if hidden_states.ndim == 4:
             hidden_states = hidden_states.squeeze(1)
-        hidden_states = rearrange(hidden_states, "b (f h w) c -> (b f) c h w", f = num_frames,h =height)
+        print(hidden_states.shape)
+        assert hidden_states.ndim == 3
+        # hidden_states = rearrange(hidden_states, "b (f h w) c -> (b f) c h w", f = num_frames,h =height)
+        hidden_states = rearrange(hidden_states, "b (f h w) c -> b c f h w", f = num_frames,h =height)
         return hidden_states
