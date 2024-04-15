@@ -1078,6 +1078,17 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
             motion_module_alphas: Union[tuple, float] = 1.0,
             debug: bool = False,
     ) -> Union[UNet3DConditionOutput, Tuple]:
+        # fp16
+        sample = sample.half()
+        if torch.is_tensor(timestep): timestep = timestep.half()
+        if torch.is_tensor(encoder_hidden_states):
+            encoder_hidden_states = encoder_hidden_states.half()
+        else:
+            encoder_hidden_states = list(map(torch.Tensor.half, encoder_hidden_states))
+        if torch.is_tensor(class_labels): class_labels = class_labels.half()
+        if torch.is_tensor(attention_mask): attention_mask = attention_mask.half()
+        pose_embedding_features = list(map(torch.Tensor.half, pose_embedding_features))
+
 
         activations = {}
 
