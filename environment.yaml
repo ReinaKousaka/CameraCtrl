@@ -25,3 +25,4 @@ dependencies:
     - wandb
     - triton
     - termcolor
+    - accelerate
