@@ -95,6 +95,7 @@ class Downsample(nn.Module):
             self.op = avg_pool_nd(dims, kernel_size=stride, stride=stride)
 
     def forward(self, x):
+        x = x.half()
         assert x.shape[1] == self.channels
         return self.op(x)
 
@@ -121,6 +122,7 @@ class ResnetBlock(nn.Module):
             self.down_opt = Downsample(in_c, use_conv=use_conv)
 
     def forward(self, x):
+        x = x.half()
         if self.down == True:
             x = self.down_opt(x)
         if self.in_conv is not None:  # edit
@@ -153,6 +155,7 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
+        x = x.half()
         x = x + self.pe[:, :x.size(1), ...]
         return self.dropout(x)
 
@@ -223,6 +226,7 @@ class CameraPoseEncoder(nn.Module):
         return get_parameter_dtype(self)
 
     def forward(self, x):
+        x = x.half()
         # unshuffle
         bs = x.shape[0]
         x = rearrange(x, "b c f h w -> (b f) c h w")
@@ -237,5 +241,5 @@ class CameraPoseEncoder(nn.Module):
                 x = rearrange(x, '(b f) c h w -> (b h w) f c', b=bs)
                 x = attention_layer(x)
                 x = rearrange(x, '(b h w) f c -> (b f) c h w', h=h, w=w)
-            features.append(x)
+            features.append(x.half())
         return features

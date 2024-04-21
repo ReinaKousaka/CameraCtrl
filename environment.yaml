@@ -26,3 +26,4 @@ dependencies:
     - triton
     - termcolor
     - accelerate
+    - scipy

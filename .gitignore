@@ -17,6 +17,7 @@ scripts/
 .idea
 *.csv
 
+output/*
 outputs/*
 !models/StableDiffusion/
 models/StableDiffusion/*

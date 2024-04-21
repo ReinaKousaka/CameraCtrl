@@ -28,7 +28,7 @@ from diffusers.models.attention_processor import AttnProcessor
 from transformers import CLIPTextModel, CLIPTokenizer
 from einops import rearrange
 
-from cameractrl.data.dataset import RealEstate10KPose
+from cameractrl.data.dataset import RealEstate10K
 from cameractrl.utils.util import setup_logger, format_time, save_videos_grid
 from cameractrl.pipelines.pipeline_animation import CameraCtrlPipeline
 from cameractrl.models.unet import UNet3DConditionModelPoseCond
@@ -167,14 +167,14 @@ def main(name: str,
     # Load scheduler, tokenizer and models.
     noise_scheduler = DDIMScheduler(**OmegaConf.to_container(noise_scheduler_kwargs))
 
-    vae = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae")
-    tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_path, subfolder="tokenizer")
-    text_encoder = CLIPTextModel.from_pretrained(pretrained_model_path, subfolder="text_encoder")
+    vae = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae", variant='fp16')
+    tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_path, subfolder="tokenizer", variant='fp16')
+    text_encoder = CLIPTextModel.from_pretrained(pretrained_model_path, subfolder="text_encoder", variant='fp16')
     unet = UNet3DConditionModelPoseCond.from_pretrained_2d(pretrained_model_path, subfolder=unet_subfolder,
                                                            unet_additional_kwargs=unet_additional_kwargs)
     pose_encoder = CameraPoseEncoder(**pose_encoder_kwargs)
 
-    # init attention processor
+    # init attentio processor
     logger.info(f"Setting the attention processors")
     unet.set_all_attn_processor(add_spatial_lora=lora_ckpt is not None,
                                 add_motion_lora=motion_lora_rank > 0,
@@ -208,7 +208,7 @@ def main(name: str,
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
     unet.requires_grad_(False)
-
+    print(f'unet attn_processors: {unet.attn_processors.values()}')
     spatial_attn_proc_modules = torch.nn.ModuleList([v for v in unet.attn_processors.values()
                                                      if not isinstance(v, (CustomizedAttnProcessor, AttnProcessor))])
     temporal_attn_proc_modules = torch.nn.ModuleList([v for v in unet.mm_attn_processors.values()
@@ -216,6 +216,11 @@ def main(name: str,
     spatial_attn_proc_modules.requires_grad_(True)
     temporal_attn_proc_modules.requires_grad_(True)
     pose_encoder.requires_grad_(True)
+
+    # TODO: verify attn modules
+    # print(f'spatial attn modules: {spatial_attn_proc_modules}')
+    # print(f'temporal attn modules: {temporal_attn_proc_modules}')
+    # exit(0)
     # set requires_grad of image lora to False
     for n, p in spatial_attn_proc_modules.named_parameters():
         if 'lora' in n:
@@ -255,24 +260,31 @@ def main(name: str,
     # Get the training dataset
     logger.info(f'Building training datasets')
     # train_dataset = RealEstate10KPose(**train_data)
-    # distributed_sampler = DistributedSampler(
-    #     train_dataset,
-    #     num_replicas=num_processes,
-    #     rank=global_rank,
-    #     shuffle=True,
-    #     seed=global_seed,
-    # )
+    train_dataset = RealEstate10K(
+        frame_path=os.path.expanduser('~/workspace/research/Realestate/media/wei/fast/realstate/train'),
+        split=os.path.expanduser('~/workspace/research/Realestate/train.json'),
+        posemat=os.path.expanduser('~/workspace/research/Realestate/train.mat'),
+        t=8
+    )
+
+    distributed_sampler = DistributedSampler(
+        train_dataset,
+        num_replicas=num_processes,
+        rank=global_rank,
+        shuffle=True,
+        seed=global_seed,
+    )
 
     # DataLoaders creation:
-    # train_dataloader = torch.utils.data.DataLoader(
-    #     train_dataset,
-    #     batch_size=train_batch_size,
-    #     shuffle=False,
-    #     sampler=distributed_sampler,
-    #     num_workers=num_workers,
-    #     pin_memory=True,
-    #     drop_last=True,
-    # )
+    train_dataloader = torch.utils.data.DataLoader(
+        train_dataset,
+        batch_size=train_batch_size,
+        shuffle=False,
+        sampler=distributed_sampler,
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=True,
+    )
 
     # # Get the validation dataset
     # logger.info(f'Building validation datasets')
@@ -372,24 +384,20 @@ def main(name: str,
         # train_dataloader.sampler.set_epoch(epoch)
         pose_adaptor.train()
 
-        # data_iter = iter(train_dataloader)
-        for step in range(1):
-
+        for step, batch in enumerate(train_dataloader):
             iter_start_time = time.time()
-            # batch = next(data_iter)
             data_end_time = time.time()
             # if cfg_random_null_text:
                 # batch['text'] = [name if random.random() > cfg_random_null_text_ratio else "" for name in batch['text']]
 
             # Data batch sanity check
             if epoch == first_epoch and step == 0 and do_sanity_check:
-                pixel_values = torch.zeros(train_batch_size, T, 3, 256, 384)
-                texts = 'text'
-                
+                # texts = 'text'
+                pixel_values = batch['pixel_values']
                 # pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
                 pixel_values = rearrange(pixel_values, "b f c h w -> b c f h w")
-                for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
-                    pixel_value = pixel_value[None, ...]
+                # for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
+                #     pixel_value = pixel_value[None, ...]
                     # save_videos_grid(pixel_value,
                     #                  f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.gif",
                     #                  rescale=True)
@@ -397,8 +405,11 @@ def main(name: str,
             ### >>>> Training >>>> ###
 
             # Convert videos to latent space
-            # pixel_values = batch["pixel_values"].to(local_rank)
-            pixel_values = torch.zeros(train_batch_size, T, 3, 256, 384).to(local_rank) 
+            pixel_values = batch["pixel_values"].to(local_rank)     # B, T, C, H, W
+            plucker_embedding = batch['plucker_embed'].to(device=local_rank)        # B, T, 6, H, W
+            extrinsics = batch['extrinsics'].to(device=local_rank)      # B, T, 4, 4
+            intrinsics = batch['intrinsics'].to(device=local_rank)      # B, 6
+            pose_embed = batch['pose_embed'].to(device=local_rank)      # B, T, 12
 
             video_length = pixel_values.shape[1]
             with torch.no_grad():
@@ -422,31 +433,27 @@ def main(name: str,
 
             # Get the text embedding for conditioning
             with torch.no_grad():
-                prompt_ids = tokenizer(
-                    texts, max_length=tokenizer.model_max_length, padding="max_length", truncation=True,
-                    return_tensors="pt"
-                ).input_ids.to(latents.device)
+                # TODO: solve text
+                # prompt_ids = tokenizer(
+                #     texts, max_length=tokenizer.model_max_length, padding="max_length", truncation=True,
+                #     return_tensors="pt"
+                # ).input_ids.to(latents.device)
                 # encoder_hidden_states = text_encoder(prompt_ids)[0]  # b l c
                 encoder_hidden_states = torch.zeros(
                     train_batch_size, 77, 768).to(device=local_rank)
 
             # Predict the noise residual and compute loss
             # Mixed-precision training
-            plucker_embedding = torch.rand(
-                train_batch_size, T,6,256,384).to(device=local_rank)
-            # plucker_embedding = batch["plucker_embedding"].to(device=local_rank)  # [b, f, 6, h, w]
-            plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f h, w]
+            plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f, h, w]
 
             with torch.cuda.amp.autocast(enabled=mixed_precision_training):
-                print(f'noisy_latents: {noisy_latents.shape}')
-                print(f'timesteps: {timesteps}')
-                print(f'encoder_hidden_states: {encoder_hidden_states.shape}')
-                print(f'plucker_embedding: {plucker_embedding.shape}')
+                # TODO: add pose matrcies to down blocks
                 model_pred = pose_adaptor(noisy_latents,
-                                          timesteps,
-                                          encoder_hidden_states=encoder_hidden_states,
-                                          pose_embedding=plucker_embedding)  # [b c f h w]
-                print('after pose adaptor')
+                    timesteps,
+                    encoder_hidden_states=encoder_hidden_states,
+                    pose_embedding=plucker_embedding,
+
+                )  # [b c f h w]
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":

@@ -11,6 +11,8 @@ import numpy as np
 from decord import VideoReader
 from torch.utils.data.dataset import Dataset
 from packaging import version as pver
+import scipy.io
+from PIL import Image
 
 
 class RandomHorizontalFlipWithPose(nn.Module):
@@ -61,9 +63,10 @@ def custom_meshgrid(*args):
 
 def ray_condition(K, c2w, H, W, device, flip_flag=None):
     # c2w: B, V, 4, 4
-    # K: B, V, 4
+    # K: 6
 
-    B, V = K.shape[:2]
+    B, V = c2w.shape[:2]
+    assert B == 1
 
     j, i = custom_meshgrid(
         torch.linspace(0, H - 1, H, device=device, dtype=c2w.dtype),
@@ -83,7 +86,9 @@ def ray_condition(K, c2w, H, W, device, flip_flag=None):
         i[:, flip_flag, ...] = i_flip
         j[:, flip_flag, ...] = j_flip
 
-    fx, fy, cx, cy = K.chunk(4, dim=-1)     # B,V, 1
+    # fx, fy, cx, cy = K.chunk(4, dim=-1)     # B,V, 1
+    # TODO: verify the params, as well as c2w/w2c
+    fx, fy, cx, cy = K[0], K[1], K[2], K[3]
 
     zs = torch.ones_like(i)                 # [B, V, HxW]
     xs = (i - cx) / fx * zs
@@ -317,6 +322,7 @@ class RealEstate10KPose(Dataset):
             flip_flag = torch.zeros(self.sample_n_frames, dtype=torch.bool, device=c2w.device)
         plucker_embedding = ray_condition(intrinsics, c2w, self.sample_size[0], self.sample_size[1], device='cpu',
                                           flip_flag=flip_flag)[0].permute(0, 3, 1, 2).contiguous()
+        # [V, H, W, 6] --> [V, 6, H, W]
 
         return pixel_values, video_caption, plucker_embedding, flip_flag, clip_name
 
@@ -346,3 +352,98 @@ class RealEstate10KPose(Dataset):
 
         return sample
 
+
+class RealEstate10K(Dataset):
+    def __init__(self, frame_path, split, posemat, w = 256, h = 384, t = 10):
+        """
+        Args:
+            split: the path to the json file of RealEstate10K
+            posemat: the path to the pose 
+        """
+        with open(split, 'r') as f:
+            self.data = json.load(f)
+        self.vs = list(self.data.keys())
+        self.channels = 3
+        self.mat = scipy.io.loadmat(posemat)
+        self.frame_path = frame_path
+        self.w = w
+        self.h = h
+        self.t = t
+
+    def __len__(self):
+        return len(self.vs) * 1000
+
+    def __getitem__(self, idx):
+        try:
+            idx = int(idx / 1000.0)
+            plist = self.mat[self.vs[idx]]
+            flist = self.data[self.vs[idx]]
+            flist.sort(key=lambda f: int(''.join(filter(str.isdigit, f))))
+            lv = len(flist)
+            if lv > self.t * 8:
+                fps = random.choice([1, 2, 4, 8])
+            elif lv <= self.t * 8 and lv > self.t * 4:
+                fps = random.choice([1, 2, 4])
+            elif lv <= self.t * 4 and lv > self.t * 2:
+                fps = random.choice([1, 2])
+            else:
+                fps = 1
+
+            start_f = random.randint(0, lv - fps * self.t)
+            pixel_values = torch.empty((self.t, self.channels, self.h, self.w))
+            pose_embed = torch.empty((self.t, 12))
+            extrinsics = torch.empty((self.t, 4, 4))
+            intrinsics = plist[0][1: 7]
+
+            flip = random.choice([True, False])
+            for i in range(self.t):
+                if flip:
+                    index = start_f + i * fps
+                else:
+                    index = start_f + (self.t - 1 - i) * fps
+                frame_path = os.path.join(self.frame_path, self.vs[idx], flist[index])
+                pose = np.identity(4)
+                tmp = plist[index][7:].reshape((3, 4))
+                pose[:3, :4] = tmp
+                if i == 0:
+                    base_pose = np.linalg.inv(np.array(pose))
+
+                with Image.open(frame_path) as img:
+                    # Resize the image and convert it to a tensor
+                    img_resized = img.resize((self.w, self.h))  # hard code here
+                    img_tensor = torch.from_numpy(np.array(img_resized)).float()
+
+                    # Normalize the image by scaling pixel values to [0, 1]
+                    img_normalized = img_tensor / 255.0
+
+                    # Rearrange channels if necessary
+                    if self.channels == 3:
+                        img_normalized = img_normalized.permute(
+                            2, 0, 1)  # For RGB images
+                    elif self.channels == 1:
+                        img_normalized = img_normalized.mean(
+                            dim=2, keepdim=True)  # For grayscale images
+
+                    pixel_values[i] = img_normalized
+                pose_embed[i] = torch.tensor(np.matmul(base_pose, pose)[:3, :].flatten())
+                extrinsics[i] = torch.tensor(pose)
+
+                # [T, H, W, 6] --> [T, 6, H, W]
+                plucker_embedding = ray_condition(
+                    intrinsics,
+                    extrinsics.unsqueeze(0),
+                    W=self.w,
+                    H=self.h,
+                    device='cpu',
+                    flip_flag=None if flip is False else torch.ones(self.t)
+                )[0].permute(0, 3, 1, 2).contiguous()
+            return {
+                'pixel_values': pixel_values,   # T, C, H, W
+                'pose_embed': pose_embed,       # T, 12
+                'fps': 8 / fps,
+                'extrinsics':extrinsics,        # T, 4, 4
+                'intrinsics': intrinsics,       # 6,
+                'plucker_embed': plucker_embedding,     # T, 6, H, W
+            }
+        except:
+            return self.__getitem__(random.randint(0, len(self.vs) - 1))

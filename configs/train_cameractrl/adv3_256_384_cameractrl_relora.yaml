@@ -89,7 +89,7 @@ validation_steps_tuple: [2, ]
 learning_rate:    1.e-4
 
 num_workers: 8
-train_batch_size: 2
+train_batch_size: 1
 checkpointing_epochs: -1
 checkpointing_steps:  1000
 
