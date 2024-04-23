@@ -4,8 +4,7 @@ pretrained_model_path: "./stable-diffusion-v1-5"
 unet_subfolder: "unet_webvidlora_v3"
 
 train_data:
-  root_path:       "[replace RealEstate10K root path]"
-  annotation_json:       "annotations/train.json"
+  root_path:       "./Realestate"
   sample_stride: 8
   sample_n_frames: 16
   relative_pose: true
@@ -16,8 +15,11 @@ train_data:
   use_flip: true
 
 validation_data:
-  root_path:       "[replace RealEstate10K root path]"
-  annotation_json:       "annotations/validation.json"
+  root_path:       "./Realestate"
+  frame_dir:      "./test"
+  image_json:     "test.json"
+  caption_json:   "test_captions.json"
+  pose_mat:       "test.mat"
   sample_stride: 8
   sample_n_frames: 16
   relative_pose: true
@@ -26,7 +28,6 @@ validation_data:
   rescale_fxy: true
   shuffle_frames: false
   use_flip: false
-  return_clip_name: true
 
 unet_additional_kwargs:
   use_motion_module              : true

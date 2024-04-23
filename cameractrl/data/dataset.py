@@ -62,10 +62,7 @@ def custom_meshgrid(*args):
 
 
 def ray_condition(K, c2w, H, W, device, flip_flag=None):
-    # c2w: B, V, 4, 4
-    # K: 6
-
-    B, V = c2w.shape[:2]
+    B, V = K.shape[:2]
     assert B == 1
 
     j, i = custom_meshgrid(
@@ -86,9 +83,7 @@ def ray_condition(K, c2w, H, W, device, flip_flag=None):
         i[:, flip_flag, ...] = i_flip
         j[:, flip_flag, ...] = j_flip
 
-    # fx, fy, cx, cy = K.chunk(4, dim=-1)     # B,V, 1
-    # TODO: verify the params, as well as c2w/w2c
-    fx, fy, cx, cy = K[0], K[1], K[2], K[3]
+    fx, fy, cx, cy = K.chunk(4, dim=-1)     # B,V, 1
 
     zs = torch.ones_like(i)                 # [B, V, HxW]
     xs = (i - cx) / fx * zs
@@ -192,31 +187,39 @@ class RealEstate10KPose(Dataset):
     def __init__(
             self,
             root_path,
-            annotation_json,
+            frame_dir='./train',
+            image_json='train.json',       # video_id -> [image_file_names]
+            caption_json='train_captions.json',     # video_id -> [video_caption]
+            pose_mat='train.mat',
             sample_stride=4,
             minimum_sample_stride=1,
-            sample_n_frames=16,
+            num_channels=3,
+            sample_n_frames=8,      # t
             relative_pose=False,
             zero_t_first_frame=False,
             sample_size=[256, 384],
-            rescale_fxy=False,
+            rescale_fxy=True,
             shuffle_frames=False,
             use_flip=False,
-            return_clip_name=False,
     ):
         self.root_path = root_path
         self.relative_pose = relative_pose
         self.zero_t_first_frame = zero_t_first_frame
         self.sample_stride = sample_stride
         self.minimum_sample_stride = minimum_sample_stride
-        self.sample_n_frames = sample_n_frames
-        self.return_clip_name = return_clip_name
+        self.num_channels = num_channels
+        self.t = sample_n_frames
 
-        self.dataset = json.load(open(os.path.join(root_path, annotation_json), 'r'))
+
+        self.frame_dir = frame_dir
+        self.dataset = json.load(open(os.path.join(root_path, image_json), 'r'))
+        self.caption_dict = json.load(open(os.path.join(root_path, caption_json), 'r'))
+        self.mat = scipy.io.loadmat(os.path.join(root_path, pose_mat))
         self.length = len(self.dataset)
 
         sample_size = tuple(sample_size) if not isinstance(sample_size, int) else (sample_size, sample_size)
         self.sample_size = sample_size
+        self.w, self.h = sample_size
         if use_flip:
             pixel_transforms = [transforms.Resize(sample_size),
                                 RandomHorizontalFlipWithPose(),
@@ -250,13 +253,6 @@ class RealEstate10KPose(Dataset):
         ret_poses = np.array(ret_poses, dtype=np.float32)
         return ret_poses
 
-    def load_video_reader(self, idx):
-        video_dict = self.dataset[idx]
-
-        video_path = os.path.join(self.root_path, video_dict['clip_path'])
-        video_reader = VideoReader(video_path)
-        return video_dict['clip_name'], video_reader, video_dict['caption']
-
     def load_cameras(self, idx):
         video_dict = self.dataset[idx]
         pose_file = os.path.join(self.root_path, video_dict['pose_file'])
@@ -268,32 +264,44 @@ class RealEstate10KPose(Dataset):
         return cam_params
 
     def get_batch(self, idx):
-        clip_name, video_reader, video_caption = self.load_video_reader(idx)
-        cam_params = self.load_cameras(idx)
-        assert len(cam_params) >= self.sample_n_frames
-        total_frames = len(cam_params)
+        video_id = list(self.dataset.keys())[idx]
+        plist = self.mat[video_id]
+        flist = self.dataset[video_id]
+        flist.sort(key=lambda f: int(''.join(filter(str.isdigit, f))))
+        video_caption = self.caption_dict[video_id + '.mp4'][0]
+        total_frames = len(flist)
 
         current_sample_stride = self.sample_stride
-
-        if total_frames < self.sample_n_frames * current_sample_stride:
-            maximum_sample_stride = int(total_frames // self.sample_n_frames)
+        if total_frames < self.t * current_sample_stride:
+            maximum_sample_stride = int(total_frames // self.t)
             current_sample_stride = random.randint(self.minimum_sample_stride, maximum_sample_stride)
 
-        cropped_length = self.sample_n_frames * current_sample_stride
+        cropped_length = self.t * current_sample_stride
         start_frame_ind = random.randint(0, max(0, total_frames - cropped_length - 1))
         end_frame_ind = min(start_frame_ind + cropped_length, total_frames)
 
-        assert end_frame_ind - start_frame_ind >= self.sample_n_frames
-        frame_indices = np.linspace(start_frame_ind, end_frame_ind - 1, self.sample_n_frames, dtype=int)
+        assert end_frame_ind - start_frame_ind >= self.t
+        frame_indices = np.linspace(start_frame_ind, end_frame_ind - 1, self.t, dtype=int)
 
         if self.shuffle_frames:
-            perm = np.random.permutation(self.sample_n_frames)
+            perm = np.random.permutation(self.t)
             frame_indices = frame_indices[perm]
 
-        pixel_values = torch.from_numpy(video_reader.get_batch(frame_indices).asnumpy()).permute(0, 3, 1, 2).contiguous()
+        # stack images into a tensor
+        pixel_values = []
+        transformer = transforms.ToTensor()
+
+        for frame_idx in frame_indices:
+            with Image.open(os.path.join(self.root_path, self.frame_dir, video_id, flist[frame_idx])) as img:
+                pixel_values.append(transformer(img).float())
+
+        pixel_values = torch.stack(pixel_values, dim=0)       # t, c, h, w
         pixel_values = pixel_values / 255.
 
-        cam_params = [cam_params[indice] for indice in frame_indices]
+        # load poses
+        cam_params = [plist[indice] for indice in frame_indices]
+        cam_params = [Camera(cam_param) for cam_param in cam_params]
+
         if self.rescale_fxy:
             ori_h, ori_w = pixel_values.shape[-2:]
             ori_wh_ratio = ori_w / ori_h
@@ -317,14 +325,14 @@ class RealEstate10KPose(Dataset):
             c2w_poses = np.array([cam_param.c2w_mat for cam_param in cam_params], dtype=np.float32)
         c2w = torch.as_tensor(c2w_poses)[None]                          # [1, n_frame, 4, 4]
         if self.use_flip:
-            flip_flag = self.pixel_transforms[1].get_flip_flag(self.sample_n_frames)
+            flip_flag = self.pixel_transforms[1].get_flip_flag(self.t)
         else:
-            flip_flag = torch.zeros(self.sample_n_frames, dtype=torch.bool, device=c2w.device)
+            flip_flag = torch.zeros(self.t, dtype=torch.bool, device=c2w.device)
         plucker_embedding = ray_condition(intrinsics, c2w, self.sample_size[0], self.sample_size[1], device='cpu',
                                           flip_flag=flip_flag)[0].permute(0, 3, 1, 2).contiguous()
         # [V, H, W, 6] --> [V, 6, H, W]
 
-        return pixel_values, video_caption, plucker_embedding, flip_flag, clip_name
+        return pixel_values, video_caption, plucker_embedding, flip_flag
 
     def __len__(self):
         return self.length
@@ -332,7 +340,7 @@ class RealEstate10KPose(Dataset):
     def __getitem__(self, idx):
         while True:
             try:
-                video, video_caption, plucker_embedding, flip_flag, clip_name = self.get_batch(idx)
+                video, video_caption, plucker_embedding, flip_flag = self.get_batch(idx)
                 break
 
             except Exception as e:
@@ -345,105 +353,6 @@ class RealEstate10KPose(Dataset):
         else:
             for transform in self.pixel_transforms:
                 video = transform(video)
-        if self.return_clip_name:
-            sample = dict(pixel_values=video, text=video_caption, plucker_embedding=plucker_embedding, clip_name=clip_name)
-        else:
-            sample = dict(pixel_values=video, text=video_caption, plucker_embedding=plucker_embedding)
-
-        return sample
-
-
-class RealEstate10K(Dataset):
-    def __init__(self, frame_path, split, posemat, w = 256, h = 384, t = 10):
-        """
-        Args:
-            split: the path to the json file of RealEstate10K
-            posemat: the path to the pose 
-        """
-        with open(split, 'r') as f:
-            self.data = json.load(f)
-        self.vs = list(self.data.keys())
-        self.channels = 3
-        self.mat = scipy.io.loadmat(posemat)
-        self.frame_path = frame_path
-        self.w = w
-        self.h = h
-        self.t = t
-
-    def __len__(self):
-        return len(self.vs) * 1000
-
-    def __getitem__(self, idx):
-        try:
-            idx = int(idx / 1000.0)
-            plist = self.mat[self.vs[idx]]
-            flist = self.data[self.vs[idx]]
-            flist.sort(key=lambda f: int(''.join(filter(str.isdigit, f))))
-            lv = len(flist)
-            if lv > self.t * 8:
-                fps = random.choice([1, 2, 4, 8])
-            elif lv <= self.t * 8 and lv > self.t * 4:
-                fps = random.choice([1, 2, 4])
-            elif lv <= self.t * 4 and lv > self.t * 2:
-                fps = random.choice([1, 2])
-            else:
-                fps = 1
-
-            start_f = random.randint(0, lv - fps * self.t)
-            pixel_values = torch.empty((self.t, self.channels, self.h, self.w))
-            pose_embed = torch.empty((self.t, 12))
-            extrinsics = torch.empty((self.t, 4, 4))
-            intrinsics = plist[0][1: 7]
-
-            flip = random.choice([True, False])
-            for i in range(self.t):
-                if flip:
-                    index = start_f + i * fps
-                else:
-                    index = start_f + (self.t - 1 - i) * fps
-                frame_path = os.path.join(self.frame_path, self.vs[idx], flist[index])
-                pose = np.identity(4)
-                tmp = plist[index][7:].reshape((3, 4))
-                pose[:3, :4] = tmp
-                if i == 0:
-                    base_pose = np.linalg.inv(np.array(pose))
-
-                with Image.open(frame_path) as img:
-                    # Resize the image and convert it to a tensor
-                    img_resized = img.resize((self.w, self.h))  # hard code here
-                    img_tensor = torch.from_numpy(np.array(img_resized)).float()
-
-                    # Normalize the image by scaling pixel values to [0, 1]
-                    img_normalized = img_tensor / 255.0
-
-                    # Rearrange channels if necessary
-                    if self.channels == 3:
-                        img_normalized = img_normalized.permute(
-                            2, 0, 1)  # For RGB images
-                    elif self.channels == 1:
-                        img_normalized = img_normalized.mean(
-                            dim=2, keepdim=True)  # For grayscale images
-
-                    pixel_values[i] = img_normalized
-                pose_embed[i] = torch.tensor(np.matmul(base_pose, pose)[:3, :].flatten())
-                extrinsics[i] = torch.tensor(pose)
-
-                # [T, H, W, 6] --> [T, 6, H, W]
-                plucker_embedding = ray_condition(
-                    intrinsics,
-                    extrinsics.unsqueeze(0),
-                    W=self.w,
-                    H=self.h,
-                    device='cpu',
-                    flip_flag=None if flip is False else torch.ones(self.t)
-                )[0].permute(0, 3, 1, 2).contiguous()
-            return {
-                'pixel_values': pixel_values,   # T, C, H, W
-                'pose_embed': pose_embed,       # T, 12
-                'fps': 8 / fps,
-                'extrinsics':extrinsics,        # T, 4, 4
-                'intrinsics': intrinsics,       # 6,
-                'plucker_embed': plucker_embedding,     # T, 6, H, W
-            }
-        except:
-            return self.__getitem__(random.randint(0, len(self.vs) - 1))
+        # pixel_values: t, c, h, w
+        # plucker_embedding: t, 6, h, w
+        return dict(pixel_values=video, text=video_caption, plucker_embedding=plucker_embedding)

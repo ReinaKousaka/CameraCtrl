@@ -28,7 +28,7 @@ from diffusers.models.attention_processor import AttnProcessor
 from transformers import CLIPTextModel, CLIPTokenizer
 from einops import rearrange
 
-from cameractrl.data.dataset import RealEstate10K
+from cameractrl.data.dataset import RealEstate10KPose
 from cameractrl.utils.util import setup_logger, format_time, save_videos_grid
 from cameractrl.pipelines.pipeline_animation import CameraCtrlPipeline
 from cameractrl.models.unet import UNet3DConditionModelPoseCond
@@ -259,13 +259,7 @@ def main(name: str,
 
     # Get the training dataset
     logger.info(f'Building training datasets')
-    # train_dataset = RealEstate10KPose(**train_data)
-    train_dataset = RealEstate10K(
-        frame_path=os.path.expanduser('~/workspace/research/Realestate/media/wei/fast/realstate/train'),
-        split=os.path.expanduser('~/workspace/research/Realestate/train.json'),
-        posemat=os.path.expanduser('~/workspace/research/Realestate/train.mat'),
-        t=8
-    )
+    train_dataset = RealEstate10KPose(**train_data)
 
     distributed_sampler = DistributedSampler(
         train_dataset,
@@ -286,18 +280,17 @@ def main(name: str,
         drop_last=True,
     )
 
-    # # Get the validation dataset
-    # logger.info(f'Building validation datasets')
-    # validation_dataset = RealEstate10KPose(**validation_data)
-    # validation_dataloader = torch.utils.data.DataLoader(
-    #     validation_dataset,
-    #     batch_size=1,
-    #     shuffle=False,
-    #     num_workers=num_workers,
-    #     pin_memory=True,
-    #     drop_last=False
-    # )
-
+    # Get the validation dataset
+    logger.info(f'Building validation datasets')
+    validation_dataset = RealEstate10KPose(**validation_data)
+    validation_dataloader = torch.utils.data.DataLoader(
+        validation_dataset,
+        batch_size=1,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=True,
+        drop_last=False
+    )
 
 
     # Get the training iteration
