@@ -216,12 +216,11 @@ def main(name: str,
     spatial_attn_proc_modules.requires_grad_(True)
     temporal_attn_proc_modules.requires_grad_(True)
     pose_encoder.requires_grad_(True)
+    for name, para in unet.named_parameters():
+        if 'epipolar' in name:
+            para.requires_grad = True
+            print(f'set grad for: {name}')
 
-    # TODO: verify attn modules
-    # print(f'spatial attn modules: {spatial_attn_proc_modules}')
-    # print(f'temporal attn modules: {temporal_attn_proc_modules}')
-    # exit(0)
-    # set requires_grad of image lora to False
     for n, p in spatial_attn_proc_modules.named_parameters():
         if 'lora' in n:
             p.requires_grad = False

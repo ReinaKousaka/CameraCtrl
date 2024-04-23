@@ -102,7 +102,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
             fuse_first_frame: bool = False,
 
             # epipolar
-            num_epipolar_layers: Union[int, Tuple[int]] = (2, 2, 2, 0),
+            num_epipolar_layers: Union[int, Tuple[int]] = (2, 2, 2, 1),
     ):
         super().__init__()
         self.logger = logging.get_logger(__name__)
@@ -983,6 +983,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                     block_id = int(name[len("down_blocks.")])
                     hidden_size = self.config.block_out_channels[block_id]
                 elif name.startswith("epipolar"):
+                    # TODO: confirm the attn processor
                     # block_id = int(name[len('epipolar.')])
                     # hidden_size = self.config.
                     spatial_attn_procs[name] = CustomizedAttnProcessor()

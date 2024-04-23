@@ -463,8 +463,6 @@ class EpipolarTransformerBlock(nn.Module):
     ) -> torch.FloatTensor:
         # Notice that normalization is always applied before the real computation in the following blocks.
         # 0. Self-Attention
-        # batch_size = hidden_states.shape[0]
-
         batch_size, num_frames, _, height, width = hidden_states.shape
         # batch_frames, _, height, width = hidden_states.shape
         num_frames = image_only_indicator.shape[-1]
