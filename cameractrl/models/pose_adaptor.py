@@ -1,3 +1,4 @@
+from typing import List, Tuple
 import math
 import torch
 import torch.nn as nn
@@ -18,7 +19,7 @@ def get_parameter_dtype(parameter: torch.nn.Module):
     except StopIteration:
         # For torch.nn.DataParallel compatibility in PyTorch 1.5
 
-        def find_tensor_attributes(module: torch.nn.Module) -> List[Tuple[str, Tensor]]:
+        def find_tensor_attributes(module: torch.nn.Module) -> List[Tuple[str, torch.Tensor]]:
             tuples = [(k, v) for k, v in module.__dict__.items() if torch.is_tensor(v)]
             return tuples
 
@@ -95,7 +96,6 @@ class Downsample(nn.Module):
             self.op = avg_pool_nd(dims, kernel_size=stride, stride=stride)
 
     def forward(self, x):
-        x = x.half()
         assert x.shape[1] == self.channels
         return self.op(x)
 
@@ -122,7 +122,6 @@ class ResnetBlock(nn.Module):
             self.down_opt = Downsample(in_c, use_conv=use_conv)
 
     def forward(self, x):
-        x = x.half()
         if self.down == True:
             x = self.down_opt(x)
         if self.in_conv is not None:  # edit
@@ -161,7 +160,6 @@ class PositionalEncoding(nn.Module):
 
 
 class CameraPoseEncoder(nn.Module):
-
     def __init__(self,
                  downscale_factor,
                  channels=[320, 640, 1280, 1280],
@@ -226,7 +224,6 @@ class CameraPoseEncoder(nn.Module):
         return get_parameter_dtype(self)
 
     def forward(self, x):
-        x = x.half()
         # unshuffle
         bs = x.shape[0]
         x = rearrange(x, "b c f h w -> (b f) c h w")

@@ -92,9 +92,6 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
             self.proj_out = nn.Conv2d(inner_dim, in_channels, kernel_size=1, stride=1, padding=0)
 
     def forward(self, hidden_states, encoder_hidden_states=None, timestep=None, return_dict: bool = True):
-        hidden_states = hidden_states.half()
-        encoder_hidden_states = encoder_hidden_states.half() if torch.is_tensor(encoder_hidden_states) else None
-        
         # Input
         assert hidden_states.dim() == 5, f"Expected hidden_states to have ndim=5, but got ndim={hidden_states.dim()}."
         batch_size, _, video_length = hidden_states.shape[:3]
@@ -154,8 +151,6 @@ class Transformer3DModel(ModelMixin, ConfigMixin):
 def _chunked_feed_forward(
     ff: nn.Module, hidden_states: torch.Tensor, chunk_dim: int, chunk_size: int, lora_scale: Optional[float] = None
 ):
-    hidden_states = hidden_states.half()
-
     # "feed_forward_chunk_size" can be used to save memory
     if hidden_states.shape[chunk_dim] % chunk_size != 0:
         raise ValueError(
@@ -167,13 +162,13 @@ def _chunked_feed_forward(
         ff_output = torch.cat(
             [ff(hid_slice) for hid_slice in hidden_states.chunk(num_chunks, dim=chunk_dim)],
             dim=chunk_dim,
-        ).half()
+        )
     else:
         # TOOD(Patrick): LoRA scale can be removed once PEFT refactor is complete
         ff_output = torch.cat(
             [ff(hid_slice, scale=lora_scale) for hid_slice in hidden_states.chunk(num_chunks, dim=chunk_dim)],
             dim=chunk_dim,
-        ).half()
+        )
 
     return ff_output
 
@@ -208,9 +203,6 @@ class GatedSelfAttentionDense(nn.Module):
         self.enabled = True
 
     def forward(self, x: torch.Tensor, objs: torch.Tensor) -> torch.Tensor:
-        x = x.half()
-        objs = objs.half()
-
         if not self.enabled:
             return x
 
@@ -258,7 +250,7 @@ class FeedForward(nn.Module):
         if activation_fn == "gelu-approximate":
             act_fn = GELU(dim, inner_dim, approximate="tanh", bias=bias)
         elif activation_fn == "geglu":
-            print(f'dim = {dim}, inner_dim = {inner_dim}, bias = {bias}')
+            # TODO: confirm the bias for geglu
             # act_fn = GEGLU(dim, inner_dim, bias=bias)
             act_fn = GEGLU(dim, inner_dim)
         elif activation_fn == "geglu-approximate":
@@ -276,8 +268,6 @@ class FeedForward(nn.Module):
             self.net.append(nn.Dropout(dropout))
 
     def forward(self, hidden_states: torch.Tensor, scale: float = 1.0) -> torch.Tensor:
-        hidden_states = hidden_states.half()
-
         compatible_cls = (GEGLU,) if USE_PEFT_BACKEND else (GEGLU, LoRACompatibleLinear)
         for module in self.net:
             if isinstance(module, compatible_cls):
@@ -471,15 +461,10 @@ class EpipolarTransformerBlock(nn.Module):
         class_labels: Optional[torch.LongTensor] = None,
         image_only_indicator: Optional[torch.Tensor] = None,
     ) -> torch.FloatTensor:
-        hidden_states = hidden_states.half()
-        attention_mask = attention_mask.half() if torch.is_tensor(attention_mask) else None
-        encoder_hidden_states = encoder_hidden_states.half() if torch.is_tensor(encoder_hidden_states) else None
-        image_only_indicator = image_only_indicator.half() if torch.is_tensor(image_only_indicator) else None
-
         # Notice that normalization is always applied before the real computation in the following blocks.
         # 0. Self-Attention
         # batch_size = hidden_states.shape[0]
-        print(f'hidden_states shape: {hidden_states.shape}')
+
         batch_size, num_frames, _, height, width = hidden_states.shape
         # batch_frames, _, height, width = hidden_states.shape
         num_frames = image_only_indicator.shape[-1]
@@ -499,7 +484,6 @@ class EpipolarTransformerBlock(nn.Module):
                 hidden_states, timestep, class_labels, hidden_dtype=hidden_states.dtype
             )
         elif self.use_layer_norm:
-            print(f'EpipolarBlock: hidden_states = {hidden_states.shape}')
             norm_hidden_states = self.norm1(hidden_states)
         elif self.use_ada_layer_norm_single:
             shift_msa, scale_msa, gate_msa, shift_mlp, scale_mlp, gate_mlp = (
@@ -639,7 +623,6 @@ class EpipolarTransformerBlock(nn.Module):
 
         if hidden_states.ndim == 4:
             hidden_states = hidden_states.squeeze(1)
-        print(hidden_states.shape)
         assert hidden_states.ndim == 3
         # hidden_states = rearrange(hidden_states, "b (f h w) c -> (b f) c h w", f = num_frames,h =height)
         hidden_states = rearrange(hidden_states, "b (f h w) c -> b c f h w", f = num_frames,h =height)

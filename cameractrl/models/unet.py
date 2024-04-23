@@ -971,7 +971,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                 else:
                     spatial_attn_procs[name] = CustomizedAttnProcessor()
         elif (not add_spatial) and add_spatial_lora:
-            print(f'attn_processors keys: {self.attn_processors.keys()}')
+            # print(f'attn_processors keys: {self.attn_processors.keys()}')
             for name in self.attn_processors.keys():
                 cross_attention_dim = None if name.endswith("attn1.processor") else self.config.cross_attention_dim
                 if name.startswith("mid_block"):
@@ -1078,18 +1078,6 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
             motion_module_alphas: Union[tuple, float] = 1.0,
             debug: bool = False,
     ) -> Union[UNet3DConditionOutput, Tuple]:
-        # fp16
-        sample = sample.half()
-        if torch.is_tensor(timestep): timestep = timestep.half()
-        if torch.is_tensor(encoder_hidden_states):
-            encoder_hidden_states = encoder_hidden_states.half()
-        else:
-            encoder_hidden_states = list(map(torch.Tensor.half, encoder_hidden_states))
-        if torch.is_tensor(class_labels): class_labels = class_labels.half()
-        if torch.is_tensor(attention_mask): attention_mask = attention_mask.half()
-        pose_embedding_features = list(map(torch.Tensor.half, pose_embedding_features))
-
-
         activations = {}
 
         default_overall_up_factor = 2 ** self.num_upsamplers
@@ -1154,7 +1142,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
         # pre-process
         sample = self.conv_in(sample)           # b c f h w
         activations["conv_in_out"] = sample
-        # print(f'sample shape {sample.shape}')
+
 
         # to be fused
         if self.down_fusers[0] != None:
@@ -1166,7 +1154,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                 temb=emb_single,
             )
             sample = torch.cat([sample[:, :, :1], fused_sample], dim=2)
-        # print(f'sample shape {sample.shape}')
+
         activations["conv_in_fuse_out"] = sample
 
         # down
@@ -1176,8 +1164,6 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
         if isinstance(motion_module_alphas, float):
             motion_module_alphas = (motion_module_alphas,) * 5
 
-        # print(f'down fuser: {self.down_fusers[1:]}')
-        # print(f'mm alpha: {motion_module_alphas[:-1]}')
         i = -1
         for downsample_block, pose_embedding_feature, down_fuser, motion_module_alpha in zip(self.down_blocks,
                                                                                              pose_embedding_features,
@@ -1219,14 +1205,12 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
 
             if self.epipolar[i]:
                 for epipolar_block in self.epipolar[i]:
-                    print(f'passing sample into epipolar: sample shape {sample.shape}')
                     sample = epipolar_block(
                         sample,
                         # attention_mask=attention_mask[i],
                         attention_mask=attention_mask,
                         image_only_indicator=image_only_indicator,
                     )
-                    print(f'getting sample out of epipolar: sample shape {sample.shape}')
 
             down_block_res_samples += res_samples
 

@@ -230,12 +230,6 @@ class UNetMidBlock3DCrossAttn(nn.Module):
 
     def forward(self, hidden_states, temb=None, encoder_hidden_states=None, attention_mask=None,
                 motion_module_alpha=1., cross_attention_kwargs=None, motion_cross_attention_kwargs=None):
-        hidden_states = hidden_states.half()
-        temb = temb.half() if temb is not None else None
-        encoder_hidden_states = encoder_hidden_states.half() if encoder_hidden_states is not None else None
-        attention_mask = attention_mask.half() if attention_mask is not None else None
-        
-
         video_length = hidden_states.shape[2]
         temb_repeated = repeat(temb, "b c -> (b f) c", f=video_length)
 
@@ -365,12 +359,6 @@ class CrossAttnDownBlock3D(nn.Module):
 
     def forward(self, hidden_states, temb=None, encoder_hidden_states=None, attention_mask=None,
                 motion_module_alpha=1., cross_attention_kwargs={}, motion_cross_attention_kwargs={}):
-        hidden_states = hidden_states.half()
-        temb = temb.half() if temb is not None else None
-        encoder_hidden_states = encoder_hidden_states.half() if encoder_hidden_states is not None else None
-        attention_mask = attention_mask.half() if attention_mask is not None else None
-
-
         video_length = hidden_states.shape[2]
         temb_repeated = repeat(temb, "b c -> (b f) c", f=video_length)
 
@@ -505,10 +493,6 @@ class DownBlock3D(nn.Module):
 
     def forward(self, hidden_states, temb=None, encoder_hidden_states=None, motion_module_alpha=1.,
                 motion_cross_attention_kwargs={}, **kwargs):
-        hidden_states = hidden_states.half()
-        temb = temb.half() if temb is not None else None
-        encoder_hidden_states = encoder_hidden_states.half() if encoder_hidden_states is not None else None
-        
         video_length = hidden_states.shape[2]
         temb_repeated = repeat(temb, "b c -> (b f) c", f=video_length)
         output_states = ()
@@ -656,11 +640,6 @@ class CrossAttnUpBlock3D(nn.Module):
             cross_attention_kwargs=None,
             motion_cross_attention_kwargs={}
     ):
-        hidden_states = hidden_states.half()
-        temb = temb.half() if temb is not None else None
-        encoder_hidden_states = encoder_hidden_states.half() if encoder_hidden_states is not None else None
-        attention_mask = attention_mask.half() if attention_mask is not None else None
-        
         video_length = hidden_states.shape[2]
         temb_repeated = repeat(temb, "b c -> (b f) c", f=video_length)
 
@@ -676,7 +655,7 @@ class CrossAttnUpBlock3D(nn.Module):
 
         for resnet, attn, motion_module in zip(self.resnets, self.attentions, self.motion_modules):
             # pop res hidden states
-            res_hidden_states = res_hidden_states_tuple[-1].half()
+            res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
             hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
 
@@ -790,9 +769,6 @@ class UpBlock3D(nn.Module):
 
     def forward(self, hidden_states, res_hidden_states_tuple, temb=None, upsample_size=None, encoder_hidden_states=None,
                 motion_module_alpha=1., motion_cross_attention_kwargs={}, **kwargs):
-        hidden_states = hidden_states.half()
-        temb = temb.half() if temb is not None else None
-
         video_length = hidden_states.shape[2]
         temb_repeated = repeat(temb, "b c -> (b f) c", f=video_length)
 

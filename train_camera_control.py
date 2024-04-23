@@ -296,12 +296,12 @@ def main(name: str,
     # Get the training iteration
     if max_train_steps == -1:
         assert max_train_epoch != -1
-        # max_train_steps = max_train_epoch * len(train_dataloader)
+        max_train_steps = max_train_epoch * len(train_dataloader)
         max_train_steps = 1
 
-    # if checkpointing_steps == -1:
-    #     assert checkpointing_epochs != -1
-    #     checkpointing_steps = checkpointing_epochs * len(train_dataloader)
+    if checkpointing_steps == -1:
+        assert checkpointing_epochs != -1
+        checkpointing_steps = checkpointing_epochs * len(train_dataloader)
 
     # Scheduler
     lr_scheduler = get_scheduler(
@@ -326,8 +326,7 @@ def main(name: str,
     # pose_adaptor = DDP(pose_adaptor, device_ids=[local_rank], output_device=local_rank)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
-    # num_update_steps_per_epoch = math.ceil(len(train_dataloader) / gradient_accumulation_steps)
-    num_update_steps_per_epoch = 1
+    num_update_steps_per_epoch = math.ceil(len(train_dataloader) / gradient_accumulation_steps)
     # Afterwards we recalculate our number of training epochs
     num_train_epochs = math.ceil(max_train_steps / num_update_steps_per_epoch)
 
@@ -336,7 +335,7 @@ def main(name: str,
 
     if is_main_process:
         logger.info("***** Running training *****")
-        # logger.info(f"  Num examples = {len(train_dataset)}")
+        logger.info(f"  Num examples = {len(train_dataset)}")
         logger.info(f"  Num Epochs = {num_train_epochs}")
         logger.info(f"  Instantaneous batch size per device = {train_batch_size}")
         logger.info(f"  Total train batch size (w. parallel, distributed & accumulation) = {total_batch_size}")
@@ -349,11 +348,11 @@ def main(name: str,
         logger.info(f"Resuming the training from the checkpoint: {resume_from}")
         ckpt = torch.load(resume_from, map_location=pose_adaptor.device)
         global_step = ckpt['global_step']
-        # trained_iterations = (global_step % len(train_dataloader))
+        trained_iterations = (global_step % len(train_dataloader))
         trained_iterations = global_step
-        # first_epoch = int(global_step // len(train_dataloader))
+        first_epoch = int(global_step // len(train_dataloader))
         first_epoch = global_step
-        # optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         pose_encoder_state_dict = ckpt['pose_encoder_state_dict']
         attention_processor_state_dict = ckpt['attention_processor_state_dict']
         pose_enc_m, pose_enc_u = pose_adaptor.module.pose_encoder.load_state_dict(pose_encoder_state_dict, strict=False)
@@ -372,38 +371,34 @@ def main(name: str,
     scaler = torch.cuda.amp.GradScaler() if mixed_precision_training else None
 
     train_batch_size = 1
-    T = 8
+
     for epoch in range(first_epoch, num_train_epochs):
-        # train_dataloader.sampler.set_epoch(epoch)
+        train_dataloader.sampler.set_epoch(epoch)
         pose_adaptor.train()
 
-        for step, batch in enumerate(train_dataloader):
+        data_iter = iter(train_dataloader)
+        for step in range(trained_iterations, len(train_dataloader)):
+
             iter_start_time = time.time()
+            batch = next(data_iter)
             data_end_time = time.time()
-            # if cfg_random_null_text:
-                # batch['text'] = [name if random.random() > cfg_random_null_text_ratio else "" for name in batch['text']]
+            if cfg_random_null_text:
+                batch['text'] = [name if random.random() > cfg_random_null_text_ratio else "" for name in batch['text']]
 
             # Data batch sanity check
             if epoch == first_epoch and step == 0 and do_sanity_check:
-                # texts = 'text'
-                pixel_values = batch['pixel_values']
-                # pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
+                pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
                 pixel_values = rearrange(pixel_values, "b f c h w -> b c f h w")
-                # for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
-                #     pixel_value = pixel_value[None, ...]
-                    # save_videos_grid(pixel_value,
-                    #                  f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.gif",
-                    #                  rescale=True)
+                for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
+                    pixel_value = pixel_value[None, ...]
+                    save_videos_grid(pixel_value,
+                                     f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.gif",
+                                     rescale=True)
 
             ### >>>> Training >>>> ###
 
             # Convert videos to latent space
-            pixel_values = batch["pixel_values"].to(local_rank)     # B, T, C, H, W
-            plucker_embedding = batch['plucker_embed'].to(device=local_rank)        # B, T, 6, H, W
-            extrinsics = batch['extrinsics'].to(device=local_rank)      # B, T, 4, 4
-            intrinsics = batch['intrinsics'].to(device=local_rank)      # B, 6
-            pose_embed = batch['pose_embed'].to(device=local_rank)      # B, T, 12
-
+            pixel_values = batch["pixel_values"].to(local_rank)
             video_length = pixel_values.shape[1]
             with torch.no_grad():
                 pixel_values = rearrange(pixel_values, "b f c h w -> (b f) c h w")
@@ -416,8 +411,7 @@ def main(name: str,
             bsz = latents.shape[0]
 
             # Sample a random timestep for each video
-            timesteps = torch.randint(0, 
-            noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
+            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
             timesteps = timesteps.long()
 
             # Add noise to the latents according to the noise magnitude at each timestep
@@ -426,27 +420,21 @@ def main(name: str,
 
             # Get the text embedding for conditioning
             with torch.no_grad():
-                # TODO: solve text
-                # prompt_ids = tokenizer(
-                #     texts, max_length=tokenizer.model_max_length, padding="max_length", truncation=True,
-                #     return_tensors="pt"
-                # ).input_ids.to(latents.device)
-                # encoder_hidden_states = text_encoder(prompt_ids)[0]  # b l c
-                encoder_hidden_states = torch.zeros(
-                    train_batch_size, 77, 768).to(device=local_rank)
+                prompt_ids = tokenizer(
+                    batch['text'], max_length=tokenizer.model_max_length, padding="max_length", truncation=True,
+                    return_tensors="pt"
+                ).input_ids.to(latents.device)
+                encoder_hidden_states = text_encoder(prompt_ids)[0]  # b l c
 
             # Predict the noise residual and compute loss
             # Mixed-precision training
-            plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f, h, w]
-
+            plucker_embedding = batch["plucker_embedding"].to(device=local_rank)  # [b, f, 6, h, w]
+            plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f h, w]
             with torch.cuda.amp.autocast(enabled=mixed_precision_training):
-                # TODO: add pose matrcies to down blocks
                 model_pred = pose_adaptor(noisy_latents,
-                    timesteps,
-                    encoder_hidden_states=encoder_hidden_states,
-                    pose_embedding=plucker_embedding,
-
-                )  # [b c f h w]
+                                          timesteps,
+                                          encoder_hidden_states=encoder_hidden_states,
+                                          pose_embedding=plucker_embedding)  # [b c f h w]
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -457,7 +445,7 @@ def main(name: str,
                     raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
                 loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-            print('Reach Back')
+
             # Backpropagate
             if mixed_precision_training:
                 scaler.scale(loss).backward()
@@ -496,56 +484,56 @@ def main(name: str,
                 logger.info(f"Saved state to {save_path} (global_step: {global_step})")
 
             # Periodically validation
-            # if is_main_process and (
-            #         (global_step + 1) % validation_steps == 0 or (global_step + 1) in validation_steps_tuple):
+            if is_main_process and (
+                    (global_step + 1) % validation_steps == 0 or (global_step + 1) in validation_steps_tuple):
 
-            #     generator = torch.Generator(device=latents.device)
-            #     generator.manual_seed(global_seed)
+                generator = torch.Generator(device=latents.device)
+                generator.manual_seed(global_seed)
 
-            #     if isinstance(train_data, omegaconf.listconfig.ListConfig):
-            #         height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else \
-            #         train_data[0].sample_size
-            #         width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else \
-            #         train_data[0].sample_size
-            #     else:
-            #         height = train_data.sample_size[0] if not isinstance(train_data.sample_size,
-            #                                                              int) else train_data.sample_size
-            #         width = train_data.sample_size[1] if not isinstance(train_data.sample_size,
-            #                                                             int) else train_data.sample_size
+                if isinstance(train_data, omegaconf.listconfig.ListConfig):
+                    height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else \
+                    train_data[0].sample_size
+                    width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else \
+                    train_data[0].sample_size
+                else:
+                    height = train_data.sample_size[0] if not isinstance(train_data.sample_size,
+                                                                         int) else train_data.sample_size
+                    width = train_data.sample_size[1] if not isinstance(train_data.sample_size,
+                                                                        int) else train_data.sample_size
 
-                # validation_data_iter = iter(validation_dataloader)
+                validation_data_iter = iter(validation_dataloader)
 
-                # for idx, validation_batch in enumerate(validation_data_iter):
-                #     plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
-                #     plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
-                #     sample = validation_pipeline(
-                #         prompt=validation_batch['text'],
-                #         pose_embedding=plucker_embedding,
-                #         video_length=video_length,
-                #         height=height,
-                #         width=width,
-                #         num_inference_steps=25,
-                #         guidance_scale=8.,
-                #         generator=generator,
-                #     ).videos[0]  # [3 f h w]
-                #     sample_gt = torch.cat([sample, (validation_batch['pixel_values'][0].permute(1, 0, 2, 3) + 1.0) / 2.0], dim=2)  # [3, f, 2h, w]
-                #     if 'clip_name' in validation_batch:
-                #         save_path = f"{output_dir}/samples/sample-{global_step}/{validation_batch['clip_name'][0]}.gif"
-                #     else:
-                #         save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
-                #     save_videos_grid(sample_gt[None, ...], save_path)
-                #     logger.info(f"Saved samples to {save_path}")
-            # if (global_step % logger_interval) == 0 or global_step == 0:
-            #     gpu_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)
-            #     msg = f"Iter: {global_step}/{max_train_steps}, Loss: {loss.detach().item(): .4f}, " \
-            #           f"lr: {lr_scheduler.get_last_lr()}, Data time: {format_time(data_end_time - iter_start_time)}, " \
-            #           f"Iter time: {format_time(iter_end_time - data_end_time)}, " \
-            #           f"ETA: {format_time((iter_end_time - iter_start_time) * (max_train_steps - global_step))}, " \
-            #           f"GPU memory: {gpu_memory: .2f} G"
-            #     logger.info(msg)
+                for idx, validation_batch in enumerate(validation_data_iter):
+                    plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
+                    plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
+                    sample = validation_pipeline(
+                        prompt=validation_batch['text'],
+                        pose_embedding=plucker_embedding,
+                        video_length=video_length,
+                        height=height,
+                        width=width,
+                        num_inference_steps=25,
+                        guidance_scale=8.,
+                        generator=generator,
+                    ).videos[0]  # [3 f h w]
+                    sample_gt = torch.cat([sample, (validation_batch['pixel_values'][0].permute(1, 0, 2, 3) + 1.0) / 2.0], dim=2)  # [3, f, 2h, w]
+                    if 'clip_name' in validation_batch:
+                        save_path = f"{output_dir}/samples/sample-{global_step}/{validation_batch['clip_name'][0]}.gif"
+                    else:
+                        save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
+                    save_videos_grid(sample_gt[None, ...], save_path)
+                    logger.info(f"Saved samples to {save_path}")
+            if (global_step % logger_interval) == 0 or global_step == 0:
+                gpu_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)
+                msg = f"Iter: {global_step}/{max_train_steps}, Loss: {loss.detach().item(): .4f}, " \
+                      f"lr: {lr_scheduler.get_last_lr()}, Data time: {format_time(data_end_time - iter_start_time)}, " \
+                      f"Iter time: {format_time(iter_end_time - data_end_time)}, " \
+                      f"ETA: {format_time((iter_end_time - iter_start_time) * (max_train_steps - global_step))}, " \
+                      f"GPU memory: {gpu_memory: .2f} G"
+                logger.info(msg)
 
-            # if global_step >= max_train_steps:
-            #     break
+            if global_step >= max_train_steps:
+                break
 
     dist.destroy_process_group()
 
