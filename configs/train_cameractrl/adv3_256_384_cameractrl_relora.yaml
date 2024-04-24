@@ -44,6 +44,7 @@ unet_additional_kwargs:
     temporal_position_encoding_max_len : 32
     temporal_attention_dim_div         : 1
     zero_initialize                    : false
+  num_epipolar_layers : [2, 2, 2, 1]
 
 lora_rank: 2
 lora_scale: 1.0
@@ -84,7 +85,7 @@ do_sanity_check: true
 
 max_train_epoch:      -1
 max_train_steps:      25000
-validation_steps:       1000
+validation_steps:       500
 validation_steps_tuple: [2, ]
 
 learning_rate:    1.e-4

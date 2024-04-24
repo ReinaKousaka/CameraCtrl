@@ -289,12 +289,12 @@ class RealEstate10KPose(Dataset):
 
         # stack images into a tensor
         pixel_values = []
-        transformer = transforms.ToTensor()
+        transformer = transforms.PILToTensor()
 
         for frame_idx in frame_indices:
             with Image.open(os.path.join(self.root_path, self.frame_dir, video_id, flist[frame_idx])) as img:
                 pixel_values.append(transformer(img).float())
-
+                
         pixel_values = torch.stack(pixel_values, dim=0)       # t, c, h, w
         pixel_values = pixel_values / 255.
 
