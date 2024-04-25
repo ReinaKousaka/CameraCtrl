@@ -129,7 +129,7 @@ def main(name: str,
          ):
     check_min_version("0.10.0.dev0")
 
-    gradient_accumulation_steps = 2
+    gradient_accumulation_steps = 32
     # Initialize distributed training
     # local_rank = init_dist(launcher=launcher, port=port)
     local_rank = 0
@@ -233,9 +233,10 @@ def main(name: str,
                                      filter(lambda p: p[1].requires_grad, pose_encoder.named_parameters())]
     attention_trainable_params = [v for k, v in unet.named_parameters() if v.requires_grad and 'merge' in k and 'lora' not in k]
     attention_trainable_param_names = [k for k, v in unet.named_parameters() if v.requires_grad and 'merge' in k and 'lora' not in k]
-
-    trainable_params = encoder_trainable_params + attention_trainable_params
-    trainable_param_names = encoder_trainable_param_names + attention_trainable_param_names
+    epipolar_trainable_params = [v for k, v in unet.named_parameters() if v.requires_grad and 'epipolar' in k]
+    epipolar_trainable_params_names = [k for k, v in unet.named_parameters() if v.requires_grad and 'epipolar' in k]
+    trainable_params = encoder_trainable_params + attention_trainable_params + epipolar_trainable_params
+    trainable_param_names = encoder_trainable_param_names + attention_trainable_param_names + epipolar_trainable_params_names
 
     if is_main_process:
         logger.info(f"trainable parameter number: {len(trainable_params)}")
