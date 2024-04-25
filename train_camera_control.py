@@ -129,6 +129,7 @@ def main(name: str,
          ):
     check_min_version("0.10.0.dev0")
 
+    gradient_accumulation_steps = 2
     # Initialize distributed training
     # local_rank = init_dist(launcher=launcher, port=port)
     local_rank = 0
