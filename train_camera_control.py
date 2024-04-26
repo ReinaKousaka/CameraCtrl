@@ -205,6 +205,18 @@ def main(name: str,
     else:
         logger.info(f"We do not load pretrained motion module checkpoint")
 
+    # load trained CameraCtrl weights
+    print(f"Loading pose adaptor")
+    pose_adaptor_ckpt = './CameraCtrl.ckpt'
+    pose_adaptor_checkpoint = torch.load(pose_adaptor_ckpt, map_location='cpu')
+    pose_encoder_state_dict = pose_adaptor_checkpoint['pose_encoder_state_dict']
+    pose_encoder_m, pose_encoder_u = pose_encoder.load_state_dict(pose_encoder_state_dict)
+    assert len(pose_encoder_u) == 0 and len(pose_encoder_m) == 0
+    attention_processor_state_dict = pose_adaptor_checkpoint['attention_processor_state_dict']
+    _, attn_proc_u = unet.load_state_dict(attention_processor_state_dict, strict=False)
+    assert len(attn_proc_u) == 0
+    print(f"Loading done")
+
     # Freeze vae, and text_encoder
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
@@ -377,164 +389,172 @@ def main(name: str,
         train_dataloader.sampler.set_epoch(epoch)
         pose_adaptor.train()
 
-        data_iter = iter(train_dataloader)
-        for step in range(trained_iterations, len(train_dataloader)):
+        for _ in range(gradient_accumulation_steps):    # for gradient accumulation steps compensation
 
-            iter_start_time = time.time()
-            batch = next(data_iter)
-            data_end_time = time.time()
-            if cfg_random_null_text:
-                batch['text'] = [name if random.random() > cfg_random_null_text_ratio else "" for name in batch['text']]
+            data_iter = iter(train_dataloader)
+            for step in range(trained_iterations, len(train_dataloader)):
 
-            # Data batch sanity check
-            if epoch == first_epoch and step == 0 and do_sanity_check:
-                pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
-                pixel_values = rearrange(pixel_values, "b f c h w -> b c f h w")
-                for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
-                    pixel_value = pixel_value[None, ...]
-                    save_videos_grid(pixel_value,
-                                     f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.gif",
-                                     rescale=True)
+                iter_start_time = time.time()
+                batch = next(data_iter)
+                data_end_time = time.time()
+                if cfg_random_null_text:
+                    batch['text'] = [name if random.random() > cfg_random_null_text_ratio else "" for name in batch['text']]
 
-            ### >>>> Training >>>> ###
+                # Data batch sanity check
+                if epoch == first_epoch and step == 0 and do_sanity_check:
+                    pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
+                    pixel_values = rearrange(pixel_values, "b f c h w -> b c f h w")
+                    for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
+                        pixel_value = pixel_value[None, ...]
+                        save_videos_grid(pixel_value,
+                                        f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.gif",
+                                        rescale=True)
 
-            # Convert videos to latent space
-            pixel_values = batch["pixel_values"].to(local_rank)
-            video_length = pixel_values.shape[1]
-            with torch.no_grad():
-                pixel_values = rearrange(pixel_values, "b f c h w -> (b f) c h w")
-                latents = vae.encode(pixel_values).latent_dist.sample()
-                latents = rearrange(latents, "(b f) c h w -> b c f h w", f=video_length)
-                latents = latents * 0.18215
+                ### >>>> Training >>>> ###
 
-            # Sample noise that we'll add to the latents
-            noise = torch.randn_like(latents)  # [b, c, f, h, w]
-            bsz = latents.shape[0]
+                # Convert videos to latent space
+                pixel_values = batch["pixel_values"].to(local_rank)
+                video_length = pixel_values.shape[1]
+                with torch.no_grad():
+                    pixel_values = rearrange(pixel_values, "b f c h w -> (b f) c h w")
+                    latents = vae.encode(pixel_values).latent_dist.sample()
+                    latents = rearrange(latents, "(b f) c h w -> b c f h w", f=video_length)
+                    latents = latents * 0.18215
 
-            # Sample a random timestep for each video
-            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
-            timesteps = timesteps.long()
+                # Sample noise that we'll add to the latents
+                noise = torch.randn_like(latents)  # [b, c, f, h, w]
+                bsz = latents.shape[0]
 
-            # Add noise to the latents according to the noise magnitude at each timestep
-            # (this is the forward diffusion process)
-            noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)  # [b, c, f h, w]
+                # Sample a random timestep for each video
+                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
+                timesteps = timesteps.long()
 
-            # Get the text embedding for conditioning
-            with torch.no_grad():
-                prompt_ids = tokenizer(
-                    batch['text'], max_length=tokenizer.model_max_length, padding="max_length", truncation=True,
-                    return_tensors="pt"
-                ).input_ids.to(latents.device)
-                encoder_hidden_states = text_encoder(prompt_ids)[0]  # b l c
+                # Add noise to the latents according to the noise magnitude at each timestep
+                # (this is the forward diffusion process)
+                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)  # [b, c, f h, w]
 
-            # Predict the noise residual and compute loss
-            # Mixed-precision training
-            plucker_embedding = batch["plucker_embedding"].to(device=local_rank)  # [b, f, 6, h, w]
-            plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f h, w]
-            with torch.cuda.amp.autocast(enabled=mixed_precision_training):
-                model_pred = pose_adaptor(noisy_latents,
-                                          timesteps,
-                                          encoder_hidden_states=encoder_hidden_states,
-                                          pose_embedding=plucker_embedding)  # [b c f h w]
+                # Get the text embedding for conditioning
+                with torch.no_grad():
+                    prompt_ids = tokenizer(
+                        batch['text'], max_length=tokenizer.model_max_length, padding="max_length", truncation=True,
+                        return_tensors="pt"
+                    ).input_ids.to(latents.device)
+                    encoder_hidden_states = text_encoder(prompt_ids)[0]  # b l c
 
-                # Get the target for loss depending on the prediction type
-                if noise_scheduler.config.prediction_type == "epsilon":
-                    target = noise
-                elif noise_scheduler.config.prediction_type == "v_prediction":
-                    raise NotImplementedError
-                else:
-                    raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+                # Predict the noise residual and compute loss
+                # Mixed-precision training
+                plucker_embedding = batch["plucker_embedding"].to(device=local_rank)  # [b, f, 6, h, w]
+                plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f h, w]
+                with torch.cuda.amp.autocast(enabled=mixed_precision_training):
+                    model_pred = pose_adaptor(noisy_latents,
+                                            timesteps,
+                                            encoder_hidden_states=encoder_hidden_states,
+                                            pose_embedding=plucker_embedding)  # [b c f h w]
 
-                loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-
-            # Backpropagate
-            if mixed_precision_training:
-                scaler.scale(loss).backward()
-                """ >>> gradient clipping >>> """
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
-                                               max_grad_norm)
-                """ <<< gradient clipping <<< """
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                loss.backward()
-                """ >>> gradient clipping >>> """
-                torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
-                                               max_grad_norm)
-                """ <<< gradient clipping <<< """
-                optimizer.step()
-
-            lr_scheduler.step()
-            optimizer.zero_grad(set_to_none=True)
-            global_step += 1
-            iter_end_time = time.time()
-
-            # Save checkpoint
-            if is_main_process and (global_step % checkpointing_steps == 0):
-                save_path = os.path.join(output_dir, f"checkpoints")
-                state_dict = {
-                    "epoch": epoch,
-                    "global_step": global_step,
-                    "pose_encoder_state_dict": pose_adaptor.module.pose_encoder.state_dict(),
-                    "attention_processor_state_dict": {k: v for k, v in unet.state_dict().items()
-                                                       if k in attention_trainable_param_names},
-                    "optimizer_state_dict": optimizer.state_dict()
-                }
-                torch.save(state_dict, os.path.join(save_path, f"checkpoint-step-{global_step}.ckpt"))
-                logger.info(f"Saved state to {save_path} (global_step: {global_step})")
-
-            # Periodically validation
-            if is_main_process and (
-                    (global_step + 1) % validation_steps == 0 or (global_step + 1) in validation_steps_tuple):
-
-                generator = torch.Generator(device=latents.device)
-                generator.manual_seed(global_seed)
-
-                if isinstance(train_data, omegaconf.listconfig.ListConfig):
-                    height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else \
-                    train_data[0].sample_size
-                    width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else \
-                    train_data[0].sample_size
-                else:
-                    height = train_data.sample_size[0] if not isinstance(train_data.sample_size,
-                                                                         int) else train_data.sample_size
-                    width = train_data.sample_size[1] if not isinstance(train_data.sample_size,
-                                                                        int) else train_data.sample_size
-
-                validation_data_iter = iter(validation_dataloader)
-
-                for idx, validation_batch in enumerate(validation_data_iter):
-                    plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
-                    plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
-                    sample = validation_pipeline(
-                        prompt=validation_batch['text'],
-                        pose_embedding=plucker_embedding,
-                        video_length=video_length,
-                        height=height,
-                        width=width,
-                        num_inference_steps=25,
-                        guidance_scale=8.,
-                        generator=generator,
-                    ).videos[0]  # [3 f h w]
-                    sample_gt = torch.cat([sample, (validation_batch['pixel_values'][0].permute(1, 0, 2, 3) + 1.0) / 2.0], dim=2)  # [3, f, 2h, w]
-                    if 'clip_name' in validation_batch:
-                        save_path = f"{output_dir}/samples/sample-{global_step}/{validation_batch['clip_name'][0]}.gif"
+                    # Get the target for loss depending on the prediction type
+                    if noise_scheduler.config.prediction_type == "epsilon":
+                        target = noise
+                    elif noise_scheduler.config.prediction_type == "v_prediction":
+                        raise NotImplementedError
                     else:
-                        save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
-                    save_videos_grid(sample_gt[None, ...], save_path)
-                    logger.info(f"Saved samples to {save_path}")
-            if (global_step % logger_interval) == 0 or global_step == 0:
-                gpu_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)
-                msg = f"Iter: {global_step}/{max_train_steps}, Loss: {loss.detach().item(): .4f}, " \
-                      f"lr: {lr_scheduler.get_last_lr()}, Data time: {format_time(data_end_time - iter_start_time)}, " \
-                      f"Iter time: {format_time(iter_end_time - data_end_time)}, " \
-                      f"ETA: {format_time((iter_end_time - iter_start_time) * (max_train_steps - global_step))}, " \
-                      f"GPU memory: {gpu_memory: .2f} G"
-                logger.info(msg)
+                        raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-            if global_step >= max_train_steps:
-                break
+                    loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+
+                # Backpropagate
+                if mixed_precision_training:
+                    scaler.scale(loss).backward()
+                    if (step + 1) % gradient_accumulation_steps == 0:
+                        """ >>> gradient clipping >>> """
+                        scaler.unscale_(optimizer)
+                        torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
+                                                    max_grad_norm)
+                        """ <<< gradient clipping <<< """
+                        scaler.step(optimizer)
+                        scaler.update()
+                else:
+                    loss.backward()
+                    """ >>> gradient clipping >>> """
+                    torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
+                                                max_grad_norm)
+                    """ <<< gradient clipping <<< """
+                    if (step + 1) % gradient_accumulation_steps == 0:
+                        optimizer.step()
+                
+                if (step + 1) % gradient_accumulation_steps == 0:
+                    lr_scheduler.step()
+                    optimizer.zero_grad(set_to_none=True)
+                global_step += 1
+                iter_end_time = time.time()
+
+                # Save checkpoint
+                print(f'global_step: {global_step}')
+                if is_main_process and (global_step % checkpointing_steps == 0):
+                    save_path = os.path.join(output_dir, f"checkpoints")
+                    state_dict = {
+                        "epoch": epoch,
+                        "global_step": global_step,
+                        "pose_encoder_state_dict": pose_adaptor.pose_encoder.state_dict(),
+                        "attention_processor_state_dict": {k: v for k, v in unet.state_dict().items()
+                                                        if k in attention_trainable_param_names},
+                        "optimizer_state_dict": optimizer.state_dict()
+                    }
+                    torch.save(state_dict, os.path.join(save_path, f"checkpoint-step-{global_step}.ckpt"))
+                    logger.info(f"Saved state to {save_path} (global_step: {global_step})")
+
+                # Periodically validation
+                if is_main_process and (
+                        (global_step + 1) % validation_steps == 0 or (global_step + 1) in validation_steps_tuple):
+
+                    generator = torch.Generator(device=latents.device)
+                    generator.manual_seed(global_seed)
+
+                    if isinstance(train_data, omegaconf.listconfig.ListConfig):
+                        height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else \
+                        train_data[0].sample_size
+                        width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else \
+                        train_data[0].sample_size
+                    else:
+                        height = train_data.sample_size[0] if not isinstance(train_data.sample_size,
+                                                                            int) else train_data.sample_size
+                        width = train_data.sample_size[1] if not isinstance(train_data.sample_size,
+                                                                            int) else train_data.sample_size
+
+                    validation_data_iter = iter(validation_dataloader)
+
+                    for idx, validation_batch in enumerate(validation_data_iter):
+                        plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
+                        plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
+                        sample = validation_pipeline(
+                            prompt=validation_batch['text'],
+                            pose_embedding=plucker_embedding,
+                            video_length=video_length,
+                            height=height,
+                            width=width,
+                            num_inference_steps=25,
+                            guidance_scale=8.,
+                            generator=generator,
+                        ).videos[0]  # [3 f h w]
+                        sample_gt = torch.cat([sample, (validation_batch['pixel_values'][0].permute(1, 0, 2, 3) + 1.0) / 2.0], dim=2)  # [3, f, 2h, w]
+                        if 'clip_name' in validation_batch:
+                            save_path = f"{output_dir}/samples/sample-{global_step}/{validation_batch['clip_name'][0]}.gif"
+                        else:
+                            save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
+                        save_videos_grid(sample_gt[None, ...], save_path)
+                        logger.info(f"Saved samples to {save_path}")
+                        if idx == 5: break
+
+                if (global_step % logger_interval) == 0 or global_step == 0:
+                    gpu_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)
+                    msg = f"Iter: {global_step}/{max_train_steps}, Loss: {loss.detach().item(): .4f}, " \
+                        f"lr: {lr_scheduler.get_last_lr()}, Data time: {format_time(data_end_time - iter_start_time)}, " \
+                        f"Iter time: {format_time(iter_end_time - data_end_time)}, " \
+                        f"ETA: {format_time((iter_end_time - iter_start_time) * (max_train_steps - global_step))}, " \
+                        f"GPU memory: {gpu_memory: .2f} G"
+                    logger.info(msg)
+
+                if global_step >= max_train_steps:
+                    break
 
     dist.destroy_process_group()
 
