@@ -7,6 +7,7 @@ import inspect
 import argparse
 import datetime
 import subprocess
+from tqdm import tqdm
 
 from pathlib import Path
 from omegaconf import OmegaConf
@@ -217,6 +218,7 @@ def main(name: str,
     assert len(attn_proc_u) == 0
     print(f"Loading done")
 
+    # def load_checkpoint()
     # Freeze vae, and text_encoder
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
@@ -357,22 +359,27 @@ def main(name: str,
     global_step = 0
     first_epoch = 0
 
+    # TODO: change resume ckpts
+    resume_from = './output/cameractrl_model/adv3_256_384_cameractrl_relora-2024-04-27T04-48-35/checkpoints/checkpoint-step-25000.ckpt'
+
     if resume_from is not None:
         logger.info(f"Resuming the training from the checkpoint: {resume_from}")
-        ckpt = torch.load(resume_from, map_location=pose_adaptor.device)
+        # ckpt = torch.load(resume_from, map_location=pose_adaptor.device)
+        ckpt = torch.load(resume_from)
         global_step = ckpt['global_step']
         trained_iterations = (global_step % len(train_dataloader))
         trained_iterations = global_step
         first_epoch = int(global_step // len(train_dataloader))
-        first_epoch = global_step
+        # first_epoch = global_step
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         pose_encoder_state_dict = ckpt['pose_encoder_state_dict']
         attention_processor_state_dict = ckpt['attention_processor_state_dict']
-        pose_enc_m, pose_enc_u = pose_adaptor.module.pose_encoder.load_state_dict(pose_encoder_state_dict, strict=False)
-        import pdb
-        pdb.set_trace()
+        pose_enc_m, pose_enc_u = pose_adaptor.pose_encoder.load_state_dict(pose_encoder_state_dict, strict=False)
+        # import pdb
+        # pdb.set_trace()
         assert len(pose_enc_m) == 0 and len(pose_enc_u) == 0
-        _, attention_processor_u = pose_adaptor.module.unet.load_state_dict(attention_processor_state_dict, strict=False)
+        # _, attention_processor_u = pose_adaptor.module.unet.load_state_dict(attention_processor_state_dict, strict=False)
+        _, attention_processor_u = pose_adaptor.unet.load_state_dict(attention_processor_state_dict, strict=False)
         assert len(attention_processor_u) == 0
         logger.info(f"Loading the pose encoder and attention processor weights done.")
         logger.info(f"Loading done, resuming training from the {global_step + 1}th iteration")
@@ -386,177 +393,182 @@ def main(name: str,
     train_batch_size = 1
 
     for epoch in range(first_epoch, num_train_epochs):
+        logger.info(f'current epoch: {epoch}, last epoch: {num_train_epochs - 1}')
+
         train_dataloader.sampler.set_epoch(epoch)
         pose_adaptor.train()
 
-        for _ in range(gradient_accumulation_steps):    # for gradient accumulation steps compensation
+        data_iter = iter(train_dataloader)
+        
+        # go back to the beginning
+        if trained_iterations >= 25000: trained_iterations = 0
+        # print(f'trained_iter: {trained_iterations}, len: {len(train_dataloader)}')
+        for step in tqdm(range(trained_iterations, len(train_dataloader))):
 
-            data_iter = iter(train_dataloader)
-            for step in range(trained_iterations, len(train_dataloader)):
+            iter_start_time = time.time()
+            batch = next(data_iter)
+            data_end_time = time.time()
+            if cfg_random_null_text:
+                batch['text'] = [name if random.random() > cfg_random_null_text_ratio else "" for name in batch['text']]
 
-                iter_start_time = time.time()
-                batch = next(data_iter)
-                data_end_time = time.time()
-                if cfg_random_null_text:
-                    batch['text'] = [name if random.random() > cfg_random_null_text_ratio else "" for name in batch['text']]
+            # Data batch sanity check
+            if epoch == first_epoch and step == 0 and do_sanity_check:
+                pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
+                pixel_values = rearrange(pixel_values, "b f c h w -> b c f h w")
+                for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
+                    pixel_value = pixel_value[None, ...]
+                    save_videos_grid(pixel_value,
+                                    f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.gif",
+                                    rescale=True)
 
-                # Data batch sanity check
-                if epoch == first_epoch and step == 0 and do_sanity_check:
-                    pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
-                    pixel_values = rearrange(pixel_values, "b f c h w -> b c f h w")
-                    for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
-                        pixel_value = pixel_value[None, ...]
-                        save_videos_grid(pixel_value,
-                                        f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.gif",
-                                        rescale=True)
+            ### >>>> Training >>>> ###
 
-                ### >>>> Training >>>> ###
+            # Convert videos to latent space
+            pixel_values = batch["pixel_values"].to(local_rank)
+            video_length = pixel_values.shape[1]
+            with torch.no_grad():
+                pixel_values = rearrange(pixel_values, "b f c h w -> (b f) c h w")
+                latents = vae.encode(pixel_values).latent_dist.sample()
+                latents = rearrange(latents, "(b f) c h w -> b c f h w", f=video_length)
+                latents = latents * 0.18215
 
-                # Convert videos to latent space
-                pixel_values = batch["pixel_values"].to(local_rank)
-                video_length = pixel_values.shape[1]
-                with torch.no_grad():
-                    pixel_values = rearrange(pixel_values, "b f c h w -> (b f) c h w")
-                    latents = vae.encode(pixel_values).latent_dist.sample()
-                    latents = rearrange(latents, "(b f) c h w -> b c f h w", f=video_length)
-                    latents = latents * 0.18215
+            # Sample noise that we'll add to the latents
+            noise = torch.randn_like(latents)  # [b, c, f, h, w]
+            bsz = latents.shape[0]
 
-                # Sample noise that we'll add to the latents
-                noise = torch.randn_like(latents)  # [b, c, f, h, w]
-                bsz = latents.shape[0]
+            # Sample a random timestep for each video
+            timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
+            timesteps = timesteps.long()
 
-                # Sample a random timestep for each video
-                timesteps = torch.randint(0, noise_scheduler.config.num_train_timesteps, (bsz,), device=latents.device)
-                timesteps = timesteps.long()
+            # Add noise to the latents according to the noise magnitude at each timestep
+            # (this is the forward diffusion process)
+            noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)  # [b, c, f h, w]
 
-                # Add noise to the latents according to the noise magnitude at each timestep
-                # (this is the forward diffusion process)
-                noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps)  # [b, c, f h, w]
+            # Get the text embedding for conditioning
+            with torch.no_grad():
+                prompt_ids = tokenizer(
+                    batch['text'], max_length=tokenizer.model_max_length, padding="max_length", truncation=True,
+                    return_tensors="pt"
+                ).input_ids.to(latents.device)
+                encoder_hidden_states = text_encoder(prompt_ids)[0]  # b l c
 
-                # Get the text embedding for conditioning
-                with torch.no_grad():
-                    prompt_ids = tokenizer(
-                        batch['text'], max_length=tokenizer.model_max_length, padding="max_length", truncation=True,
-                        return_tensors="pt"
-                    ).input_ids.to(latents.device)
-                    encoder_hidden_states = text_encoder(prompt_ids)[0]  # b l c
+            # Predict the noise residual and compute loss
+            # Mixed-precision training
+            plucker_embedding = batch["plucker_embedding"].to(device=local_rank)  # [b, f, 6, h, w]
+            plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f h, w]
+            with torch.cuda.amp.autocast(enabled=mixed_precision_training):
+                model_pred = pose_adaptor(noisy_latents,
+                                        timesteps,
+                                        encoder_hidden_states=encoder_hidden_states,
+                                        pose_embedding=plucker_embedding)  # [b c f h w]
 
-                # Predict the noise residual and compute loss
-                # Mixed-precision training
-                plucker_embedding = batch["plucker_embedding"].to(device=local_rank)  # [b, f, 6, h, w]
-                plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f h, w]
-                with torch.cuda.amp.autocast(enabled=mixed_precision_training):
-                    model_pred = pose_adaptor(noisy_latents,
-                                            timesteps,
-                                            encoder_hidden_states=encoder_hidden_states,
-                                            pose_embedding=plucker_embedding)  # [b c f h w]
-
-                    # Get the target for loss depending on the prediction type
-                    if noise_scheduler.config.prediction_type == "epsilon":
-                        target = noise
-                    elif noise_scheduler.config.prediction_type == "v_prediction":
-                        raise NotImplementedError
-                    else:
-                        raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
-
-                    loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-
-                # Backpropagate
-                if mixed_precision_training:
-                    scaler.scale(loss).backward()
-                    if (step + 1) % gradient_accumulation_steps == 0:
-                        """ >>> gradient clipping >>> """
-                        scaler.unscale_(optimizer)
-                        torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
-                                                    max_grad_norm)
-                        """ <<< gradient clipping <<< """
-                        scaler.step(optimizer)
-                        scaler.update()
+                # Get the target for loss depending on the prediction type
+                if noise_scheduler.config.prediction_type == "epsilon":
+                    target = noise
+                elif noise_scheduler.config.prediction_type == "v_prediction":
+                    raise NotImplementedError
                 else:
-                    loss.backward()
+                    raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+
+                loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+
+            # Backpropagate
+            if mixed_precision_training:
+                scaler.scale(loss).backward()
+                if (step + 1) % gradient_accumulation_steps == 0:
                     """ >>> gradient clipping >>> """
+                    scaler.unscale_(optimizer)
                     torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
                                                 max_grad_norm)
                     """ <<< gradient clipping <<< """
-                    if (step + 1) % gradient_accumulation_steps == 0:
-                        optimizer.step()
-                
+                    scaler.step(optimizer)
+                    scaler.update()
+            else:
+                loss.backward()
+                """ >>> gradient clipping >>> """
+                torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
+                                            max_grad_norm)
+                """ <<< gradient clipping <<< """
                 if (step + 1) % gradient_accumulation_steps == 0:
-                    lr_scheduler.step()
-                    optimizer.zero_grad(set_to_none=True)
-                global_step += 1
-                iter_end_time = time.time()
+                    optimizer.step()
+            
+            if (step + 1) % gradient_accumulation_steps == 0:
+                lr_scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+            global_step += 1
+            iter_end_time = time.time()
 
-                # Save checkpoint
-                print(f'global_step: {global_step}')
-                if is_main_process and (global_step % checkpointing_steps == 0):
-                    save_path = os.path.join(output_dir, f"checkpoints")
-                    state_dict = {
-                        "epoch": epoch,
-                        "global_step": global_step,
-                        "pose_encoder_state_dict": pose_adaptor.pose_encoder.state_dict(),
-                        "attention_processor_state_dict": {k: v for k, v in unet.state_dict().items()
-                                                        if k in attention_trainable_param_names},
-                        "optimizer_state_dict": optimizer.state_dict()
-                    }
-                    torch.save(state_dict, os.path.join(save_path, f"checkpoint-step-{global_step}.ckpt"))
-                    logger.info(f"Saved state to {save_path} (global_step: {global_step})")
+            # Save checkpoint
+            print(f'global_step: {global_step}')
+            if is_main_process and (global_step % checkpointing_steps == 0):
+                save_path = os.path.join(output_dir, f"checkpoints")
+                state_dict = {
+                    "epoch": epoch,
+                    "global_step": global_step,
+                    "pose_encoder_state_dict": pose_adaptor.pose_encoder.state_dict(),
+                    "attention_processor_state_dict": {k: v for k, v in unet.state_dict().items()
+                                                    if k in attention_trainable_param_names},
+                    "optimizer_state_dict": optimizer.state_dict()
+                }
+                torch.save(state_dict, os.path.join(save_path, f"checkpoint-step-{global_step}.ckpt"))
+                logger.info(f"Saved state to {save_path} (global_step: {global_step})")
 
-                # Periodically validation
-                if is_main_process and (
-                        (global_step + 1) % validation_steps == 0 or (global_step + 1) in validation_steps_tuple):
+            # Periodically validation
+            if is_main_process and (
+                    (global_step + 1) % validation_steps == 0 or (global_step + 1) in validation_steps_tuple):
 
-                    generator = torch.Generator(device=latents.device)
-                    generator.manual_seed(global_seed)
+                generator = torch.Generator(device=latents.device)
+                generator.manual_seed(global_seed)
 
-                    if isinstance(train_data, omegaconf.listconfig.ListConfig):
-                        height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else \
-                        train_data[0].sample_size
-                        width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else \
-                        train_data[0].sample_size
+                if isinstance(train_data, omegaconf.listconfig.ListConfig):
+                    height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else \
+                    train_data[0].sample_size
+                    width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else \
+                    train_data[0].sample_size
+                else:
+                    height = train_data.sample_size[0] if not isinstance(train_data.sample_size,
+                                                                        int) else train_data.sample_size
+                    width = train_data.sample_size[1] if not isinstance(train_data.sample_size,
+                                                                        int) else train_data.sample_size
+
+                validation_data_iter = iter(validation_dataloader)
+
+                for idx, validation_batch in enumerate(validation_data_iter):
+                    plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
+                    plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
+                    sample = validation_pipeline(
+                        prompt=validation_batch['text'],
+                        pose_embedding=plucker_embedding,
+                        video_length=video_length,
+                        height=height,
+                        width=width,
+                        num_inference_steps=25,
+                        guidance_scale=8.,
+                        generator=generator,
+                    ).videos[0]  # [3 f h w]
+                    sample_gt = torch.cat([sample, (validation_batch['pixel_values'][0].permute(1, 0, 2, 3) + 1.0) / 2.0], dim=2)  # [3, f, 2h, w]
+                    if 'clip_name' in validation_batch:
+                        save_path = f"{output_dir}/samples/sample-{global_step}/{validation_batch['clip_name'][0]}.gif"
                     else:
-                        height = train_data.sample_size[0] if not isinstance(train_data.sample_size,
-                                                                            int) else train_data.sample_size
-                        width = train_data.sample_size[1] if not isinstance(train_data.sample_size,
-                                                                            int) else train_data.sample_size
+                        save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
+                    save_videos_grid(sample_gt[None, ...], save_path)
+                    logger.info(f"Saved samples to {save_path}")
+                    if idx == 5: break
 
-                    validation_data_iter = iter(validation_dataloader)
+            if (global_step % logger_interval) == 0 or global_step == 0:
+                gpu_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)
+                msg = f"Iter: {global_step}/{max_train_steps}, Loss: {loss.detach().item(): .4f}, " \
+                    f"lr: {lr_scheduler.get_last_lr()}, Data time: {format_time(data_end_time - iter_start_time)}, " \
+                    f"Iter time: {format_time(iter_end_time - data_end_time)}, " \
+                    f"ETA: {format_time((iter_end_time - iter_start_time) * (max_train_steps - global_step))}, " \
+                    f"GPU memory: {gpu_memory: .2f} G"
+                logger.info(msg)
 
-                    for idx, validation_batch in enumerate(validation_data_iter):
-                        plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
-                        plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
-                        sample = validation_pipeline(
-                            prompt=validation_batch['text'],
-                            pose_embedding=plucker_embedding,
-                            video_length=video_length,
-                            height=height,
-                            width=width,
-                            num_inference_steps=25,
-                            guidance_scale=8.,
-                            generator=generator,
-                        ).videos[0]  # [3 f h w]
-                        sample_gt = torch.cat([sample, (validation_batch['pixel_values'][0].permute(1, 0, 2, 3) + 1.0) / 2.0], dim=2)  # [3, f, 2h, w]
-                        if 'clip_name' in validation_batch:
-                            save_path = f"{output_dir}/samples/sample-{global_step}/{validation_batch['clip_name'][0]}.gif"
-                        else:
-                            save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
-                        save_videos_grid(sample_gt[None, ...], save_path)
-                        logger.info(f"Saved samples to {save_path}")
-                        if idx == 5: break
+            # if global_step >= max_train_steps:
+            #     break
 
-                if (global_step % logger_interval) == 0 or global_step == 0:
-                    gpu_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)
-                    msg = f"Iter: {global_step}/{max_train_steps}, Loss: {loss.detach().item(): .4f}, " \
-                        f"lr: {lr_scheduler.get_last_lr()}, Data time: {format_time(data_end_time - iter_start_time)}, " \
-                        f"Iter time: {format_time(iter_end_time - data_end_time)}, " \
-                        f"ETA: {format_time((iter_end_time - iter_start_time) * (max_train_steps - global_step))}, " \
-                        f"GPU memory: {gpu_memory: .2f} G"
-                    logger.info(msg)
-
-                if global_step >= max_train_steps:
-                    break
-
-    dist.destroy_process_group()
+    print(f'Reach End of main()')
+    # dist.destroy_process_group()
 
 
 if __name__ == "__main__":
