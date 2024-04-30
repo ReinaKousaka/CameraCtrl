@@ -7,7 +7,6 @@ import inspect
 import argparse
 import datetime
 import subprocess
-from tqdm import tqdm
 
 from pathlib import Path
 from omegaconf import OmegaConf
@@ -18,8 +17,6 @@ import torch.nn.functional as F
 import torch.distributed as dist
 from torch.utils.data.distributed import DistributedSampler
 from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group
-
 
 from diffusers import AutoencoderKL, DDIMScheduler
 from diffusers.optimization import get_scheduler
@@ -36,41 +33,35 @@ from cameractrl.models.unet import UNet3DConditionModelPoseCond
 from cameractrl.models.pose_adaptor import CameraPoseEncoder, PoseAdaptor
 from cameractrl.models.attention_processor import AttnProcessor as CustomizedAttnProcessor
 
-os.environ['RANK'] = '0'
-os.environ['WORLD_SIZE'] = '1'
-os.environ['MASTER_ADDR'] = 'localhost'
-os.environ['MASTER_PORT'] = '1'
 
-
-def init_dist(launcher="pytorch", backend='nccl', port=29500, **kwargs):
+def init_dist(launcher="slurm", backend='nccl', port=29500, **kwargs):
     """Initializes distributed environment."""
     if launcher == 'pytorch':
-        # rank = int(os.environ['RANK'])
-        rank = 0
+        rank = int(os.environ['RANK'])
         num_gpus = torch.cuda.device_count()
         local_rank = rank % num_gpus
         torch.cuda.set_device(local_rank)
         dist.init_process_group(backend=backend, **kwargs)
 
-    # elif launcher == 'slurm':
-    #     proc_id = int(os.environ['SLURM_PROCID'])
-    #     ntasks = int(os.environ['SLURM_NTASKS'])
-    #     node_list = os.environ['SLURM_NODELIST']
-    #     num_gpus = torch.cuda.device_count()
-    #     local_rank = proc_id % num_gpus
-    #     torch.cuda.set_device(local_rank)
-    #     addr = subprocess.getoutput(
-    #         f'scontrol show hostname {node_list} | head -n1')
-    #     os.environ['MASTER_ADDR'] = addr
-    #     os.environ['WORLD_SIZE'] = str(ntasks)
-    #     os.environ['RANK'] = str(proc_id)
-    #     port = os.environ.get('PORT', port)
-    #     os.environ['MASTER_PORT'] = str(port)
-    #     dist.init_process_group(backend=backend)
+    elif launcher == 'slurm':
+        proc_id = int(os.environ['SLURM_PROCID'])
+        ntasks = int(os.environ['SLURM_NTASKS'])
+        node_list = os.environ['SLURM_NODELIST']
+        num_gpus = torch.cuda.device_count()
+        local_rank = proc_id % num_gpus
+        torch.cuda.set_device(local_rank)
+        addr = subprocess.getoutput(
+            f'scontrol show hostname {node_list} | head -n1')
+        os.environ['MASTER_ADDR'] = addr
+        os.environ['WORLD_SIZE'] = str(ntasks)
+        os.environ['RANK'] = str(proc_id)
+        port = os.environ.get('PORT', port)
+        os.environ['MASTER_PORT'] = str(port)
+        dist.init_process_group(backend=backend)
 
-    # else:
-    #     raise NotImplementedError(f'Not implemented launcher type: `{launcher}`!')
-    # return 0
+    else:
+        raise NotImplementedError(f'Not implemented launcher type: `{launcher}`!')
+
     return local_rank
 
 
@@ -130,21 +121,12 @@ def main(name: str,
          ):
     check_min_version("0.10.0.dev0")
 
-    gradient_accumulation_steps = 32
-    # Initialize distributed training
-    # local_rank = init_dist(launcher=launcher, port=port)
-    local_rank = 0
-    # local_rank = init_process_group(
-    #     backend='nccl', 
-    #     init_method='env://', 
-    #     rank = torch.cuda.device_count(), 
-    #     world_size = 1
-    # )
+    print(f'gradient_accumulation_steps: {gradient_accumulation_steps}')
 
-    # global_rank = dist.get_rank()
-    global_rank = 0
-    # num_processes = dist.get_world_size()
-    num_processes = 2
+    # Initialize distributed training
+    local_rank = init_dist(launcher=launcher, port=port)
+    global_rank = dist.get_rank()
+    num_processes = dist.get_world_size()
     is_main_process = global_rank == 0
 
     seed = global_seed + global_rank
@@ -169,14 +151,14 @@ def main(name: str,
     # Load scheduler, tokenizer and models.
     noise_scheduler = DDIMScheduler(**OmegaConf.to_container(noise_scheduler_kwargs))
 
-    vae = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae", variant='fp16')
-    tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_path, subfolder="tokenizer", variant='fp16')
-    text_encoder = CLIPTextModel.from_pretrained(pretrained_model_path, subfolder="text_encoder", variant='fp16')
+    vae = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae")
+    tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_path, subfolder="tokenizer")
+    text_encoder = CLIPTextModel.from_pretrained(pretrained_model_path, subfolder="text_encoder")
     unet = UNet3DConditionModelPoseCond.from_pretrained_2d(pretrained_model_path, subfolder=unet_subfolder,
                                                            unet_additional_kwargs=unet_additional_kwargs)
     pose_encoder = CameraPoseEncoder(**pose_encoder_kwargs)
 
-    # init attentio processor
+    # init attention processor
     logger.info(f"Setting the attention processors")
     unet.set_all_attn_processor(add_spatial_lora=lora_ckpt is not None,
                                 add_motion_lora=motion_lora_rank > 0,
@@ -206,24 +188,11 @@ def main(name: str,
     else:
         logger.info(f"We do not load pretrained motion module checkpoint")
 
-    # load trained CameraCtrl weights
-    print(f"Loading pose adaptor")
-    pose_adaptor_ckpt = './CameraCtrl.ckpt'
-    pose_adaptor_checkpoint = torch.load(pose_adaptor_ckpt, map_location='cpu')
-    pose_encoder_state_dict = pose_adaptor_checkpoint['pose_encoder_state_dict']
-    pose_encoder_m, pose_encoder_u = pose_encoder.load_state_dict(pose_encoder_state_dict)
-    assert len(pose_encoder_u) == 0 and len(pose_encoder_m) == 0
-    attention_processor_state_dict = pose_adaptor_checkpoint['attention_processor_state_dict']
-    _, attn_proc_u = unet.load_state_dict(attention_processor_state_dict, strict=False)
-    assert len(attn_proc_u) == 0
-    print(f"Loading done")
-
-    # def load_checkpoint()
     # Freeze vae, and text_encoder
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
     unet.requires_grad_(False)
-    print(f'unet attn_processors: {unet.attn_processors.values()}')
+
     spatial_attn_proc_modules = torch.nn.ModuleList([v for v in unet.attn_processors.values()
                                                      if not isinstance(v, (CustomizedAttnProcessor, AttnProcessor))])
     temporal_attn_proc_modules = torch.nn.ModuleList([v for v in unet.mm_attn_processors.values()
@@ -231,16 +200,17 @@ def main(name: str,
     spatial_attn_proc_modules.requires_grad_(True)
     temporal_attn_proc_modules.requires_grad_(True)
     pose_encoder.requires_grad_(True)
-    for name, para in unet.named_parameters():
-        if 'epipolar' in name:
-            para.requires_grad = True
-            print(f'set grad for: {name}')
-
+    # set requires_grad of image lora to False
     for n, p in spatial_attn_proc_modules.named_parameters():
         if 'lora' in n:
             p.requires_grad = False
             logger.info(f'Setting the `requires_grad` of parameter {n} to false')
     pose_adaptor = PoseAdaptor(unet, pose_encoder)
+
+    for name, para in unet.named_parameters():
+        if 'epipolar' in name:
+            para.requires_grad = True
+
 
     encoder_trainable_params = list(filter(lambda p: p.requires_grad, pose_encoder.parameters()))
     encoder_trainable_param_names = [p[0] for p in
@@ -269,13 +239,12 @@ def main(name: str,
         eps=adam_epsilon,
     )
     # Move models to GPU
-    vae.to(0)
-    text_encoder.to(0)
+    vae.to(local_rank)
+    text_encoder.to(local_rank)
 
     # Get the training dataset
     logger.info(f'Building training datasets')
     train_dataset = RealEstate10KPose(**train_data)
-
     distributed_sampler = DistributedSampler(
         train_dataset,
         num_replicas=num_processes,
@@ -307,12 +276,10 @@ def main(name: str,
         drop_last=False
     )
 
-
     # Get the training iteration
     if max_train_steps == -1:
         assert max_train_epoch != -1
         max_train_steps = max_train_epoch * len(train_dataloader)
-        max_train_steps = 1
 
     if checkpointing_steps == -1:
         assert checkpointing_epochs != -1
@@ -337,8 +304,8 @@ def main(name: str,
     validation_pipeline.enable_vae_slicing()
 
     # DDP wrapper
-    pose_adaptor.to(0)
-    # pose_adaptor = DDP(pose_adaptor, device_ids=[local_rank], output_device=local_rank)
+    pose_adaptor.to(local_rank)
+    pose_adaptor = DDP(pose_adaptor, device_ids=[local_rank], output_device=local_rank)
 
     # We need to recalculate our total training steps as the size of the training dataloader may have changed.
     num_update_steps_per_epoch = math.ceil(len(train_dataloader) / gradient_accumulation_steps)
@@ -359,27 +326,20 @@ def main(name: str,
     global_step = 0
     first_epoch = 0
 
-    # TODO: change resume ckpts
-    resume_from = './output/cameractrl_model/adv3_256_384_cameractrl_relora-2024-04-27T04-48-35/checkpoints/checkpoint-step-25000.ckpt'
-
     if resume_from is not None:
         logger.info(f"Resuming the training from the checkpoint: {resume_from}")
-        # ckpt = torch.load(resume_from, map_location=pose_adaptor.device)
-        ckpt = torch.load(resume_from)
+        ckpt = torch.load(resume_from, map_location=pose_adaptor.device)
         global_step = ckpt['global_step']
         trained_iterations = (global_step % len(train_dataloader))
-        trained_iterations = global_step
         first_epoch = int(global_step // len(train_dataloader))
-        # first_epoch = global_step
-        optimizer.load_state_dict(ckpt['optimizer_state_dict'])
+        # optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         pose_encoder_state_dict = ckpt['pose_encoder_state_dict']
         attention_processor_state_dict = ckpt['attention_processor_state_dict']
-        pose_enc_m, pose_enc_u = pose_adaptor.pose_encoder.load_state_dict(pose_encoder_state_dict, strict=False)
-        # import pdb
-        # pdb.set_trace()
+        pose_enc_m, pose_enc_u = pose_adaptor.module.pose_encoder.load_state_dict(pose_encoder_state_dict, strict=False)
+        import pdb
+        pdb.set_trace()
         assert len(pose_enc_m) == 0 and len(pose_enc_u) == 0
-        # _, attention_processor_u = pose_adaptor.module.unet.load_state_dict(attention_processor_state_dict, strict=False)
-        _, attention_processor_u = pose_adaptor.unet.load_state_dict(attention_processor_state_dict, strict=False)
+        _, attention_processor_u = pose_adaptor.module.unet.load_state_dict(attention_processor_state_dict, strict=False)
         assert len(attention_processor_u) == 0
         logger.info(f"Loading the pose encoder and attention processor weights done.")
         logger.info(f"Loading done, resuming training from the {global_step + 1}th iteration")
@@ -390,20 +350,12 @@ def main(name: str,
     # Support mixed-precision training
     scaler = torch.cuda.amp.GradScaler() if mixed_precision_training else None
 
-    train_batch_size = 1
-
     for epoch in range(first_epoch, num_train_epochs):
-        logger.info(f'current epoch: {epoch}, last epoch: {num_train_epochs - 1}')
-
         train_dataloader.sampler.set_epoch(epoch)
         pose_adaptor.train()
 
         data_iter = iter(train_dataloader)
-        
-        # go back to the beginning
-        if trained_iterations >= 25000: trained_iterations = 0
-        # print(f'trained_iter: {trained_iterations}, len: {len(train_dataloader)}')
-        for step in tqdm(range(trained_iterations, len(train_dataloader))):
+        for step in range(trained_iterations, len(train_dataloader)):
 
             iter_start_time = time.time()
             batch = next(data_iter)
@@ -418,8 +370,8 @@ def main(name: str,
                 for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
                     pixel_value = pixel_value[None, ...]
                     save_videos_grid(pixel_value,
-                                    f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.gif",
-                                    rescale=True)
+                                     f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.gif",
+                                     rescale=True)
 
             ### >>>> Training >>>> ###
 
@@ -458,9 +410,9 @@ def main(name: str,
             plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f h, w]
             with torch.cuda.amp.autocast(enabled=mixed_precision_training):
                 model_pred = pose_adaptor(noisy_latents,
-                                        timesteps,
-                                        encoder_hidden_states=encoder_hidden_states,
-                                        pose_embedding=plucker_embedding)  # [b c f h w]
+                                          timesteps,
+                                          encoder_hidden_states=encoder_hidden_states,
+                                          pose_embedding=plucker_embedding)  # [b c f h w]
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -475,39 +427,35 @@ def main(name: str,
             # Backpropagate
             if mixed_precision_training:
                 scaler.scale(loss).backward()
-                if (step + 1) % gradient_accumulation_steps == 0:
-                    """ >>> gradient clipping >>> """
-                    scaler.unscale_(optimizer)
-                    torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
-                                                max_grad_norm)
-                    """ <<< gradient clipping <<< """
-                    scaler.step(optimizer)
-                    scaler.update()
+                """ >>> gradient clipping >>> """
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
+                                               max_grad_norm)
+                """ <<< gradient clipping <<< """
+                scaler.step(optimizer)
+                scaler.update()
             else:
                 loss.backward()
                 """ >>> gradient clipping >>> """
                 torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
-                                            max_grad_norm)
+                                               max_grad_norm)
                 """ <<< gradient clipping <<< """
-                if (step + 1) % gradient_accumulation_steps == 0:
-                    optimizer.step()
-            
-            if (step + 1) % gradient_accumulation_steps == 0:
-                lr_scheduler.step()
-                optimizer.zero_grad(set_to_none=True)
+                optimizer.step()
+
+            lr_scheduler.step()
+            optimizer.zero_grad(set_to_none=True)
             global_step += 1
             iter_end_time = time.time()
 
             # Save checkpoint
-            print(f'global_step: {global_step}')
             if is_main_process and (global_step % checkpointing_steps == 0):
                 save_path = os.path.join(output_dir, f"checkpoints")
                 state_dict = {
                     "epoch": epoch,
                     "global_step": global_step,
-                    "pose_encoder_state_dict": pose_adaptor.pose_encoder.state_dict(),
+                    "pose_encoder_state_dict": pose_adaptor.module.pose_encoder.state_dict(),
                     "attention_processor_state_dict": {k: v for k, v in unet.state_dict().items()
-                                                    if k in attention_trainable_param_names},
+                                                       if k in attention_trainable_param_names},
                     "optimizer_state_dict": optimizer.state_dict()
                 }
                 torch.save(state_dict, os.path.join(save_path, f"checkpoint-step-{global_step}.ckpt"))
@@ -527,7 +475,7 @@ def main(name: str,
                     train_data[0].sample_size
                 else:
                     height = train_data.sample_size[0] if not isinstance(train_data.sample_size,
-                                                                        int) else train_data.sample_size
+                                                                         int) else train_data.sample_size
                     width = train_data.sample_size[1] if not isinstance(train_data.sample_size,
                                                                         int) else train_data.sample_size
 
@@ -553,22 +501,19 @@ def main(name: str,
                         save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
                     save_videos_grid(sample_gt[None, ...], save_path)
                     logger.info(f"Saved samples to {save_path}")
-                    if idx == 5: break
-
             if (global_step % logger_interval) == 0 or global_step == 0:
                 gpu_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)
                 msg = f"Iter: {global_step}/{max_train_steps}, Loss: {loss.detach().item(): .4f}, " \
-                    f"lr: {lr_scheduler.get_last_lr()}, Data time: {format_time(data_end_time - iter_start_time)}, " \
-                    f"Iter time: {format_time(iter_end_time - data_end_time)}, " \
-                    f"ETA: {format_time((iter_end_time - iter_start_time) * (max_train_steps - global_step))}, " \
-                    f"GPU memory: {gpu_memory: .2f} G"
+                      f"lr: {lr_scheduler.get_last_lr()}, Data time: {format_time(data_end_time - iter_start_time)}, " \
+                      f"Iter time: {format_time(iter_end_time - data_end_time)}, " \
+                      f"ETA: {format_time((iter_end_time - iter_start_time) * (max_train_steps - global_step))}, " \
+                      f"GPU memory: {gpu_memory: .2f} G"
                 logger.info(msg)
 
-            # if global_step >= max_train_steps:
-            #     break
+            if global_step >= max_train_steps:
+                break
 
-    print(f'Reach End of main()')
-    # dist.destroy_process_group()
+    dist.destroy_process_group()
 
 
 if __name__ == "__main__":

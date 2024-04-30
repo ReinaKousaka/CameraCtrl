@@ -1,3 +1,5 @@
+resume_from: "./checkpoint-step-39000.ckpt"
+gradient_accumulation_steps: 16
 
 output_dir: "output/cameractrl_model"
 pretrained_model_path: "./stable-diffusion-v1-5"
