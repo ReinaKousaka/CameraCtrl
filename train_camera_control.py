@@ -185,6 +185,17 @@ def main(name: str,
         logger.info("Loading done")
     else:
         logger.info(f"We do not load pretrained motion module checkpoint")
+    
+    # the following snippet is to load pre-trained CameraCtrl.ckpt
+    print(f"Loading pose adaptor")
+    pose_adaptor_checkpoint = torch.load('./CameraCtrl.ckpt', map_location='cpu')
+    pose_encoder_state_dict = pose_adaptor_checkpoint['pose_encoder_state_dict']
+    pose_encoder_m, pose_encoder_u = pose_encoder.load_state_dict(pose_encoder_state_dict)
+    assert len(pose_encoder_u) == 0 and len(pose_encoder_m) == 0
+    attention_processor_state_dict = pose_adaptor_checkpoint['attention_processor_state_dict']
+    _, attn_proc_u = unet.load_state_dict(attention_processor_state_dict, strict=False)
+    assert len(attn_proc_u) == 0
+    print(f"Loading done")
 
     # Freeze vae, and text_encoder
     vae.requires_grad_(False)
