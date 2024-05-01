@@ -1,12 +1,9 @@
-resume_from: "./checkpoint-step-39000.ckpt"
-gradient_accumulation_steps: 16
-
 output_dir: "output/cameractrl_model"
 pretrained_model_path: "./stable-diffusion-v1-5"
 unet_subfolder: "unet_webvidlora_v3"
 
 train_data:
-  root_path:       "./Realestate"
+  root_path:       "./RealEstate"
   sample_stride: 8
   sample_n_frames: 8
   relative_pose: true
@@ -17,7 +14,7 @@ train_data:
   use_flip: true
 
 validation_data:
-  root_path:       "./Realestate"
+  root_path:       "./RealEstate"
   frame_dir:      "./test"
   image_json:     "test.json"
   caption_json:   "test_captions.json"
@@ -85,19 +82,20 @@ noise_scheduler_kwargs:
 
 do_sanity_check: true
 
-max_train_epoch:      -1
-max_train_steps:      25000
-validation_steps:       500
+max_train_epoch:      10
+max_train_steps:      -1
+validation_steps:       1000
 validation_steps_tuple: [2, ]
 
 learning_rate:    1.e-4
 
 num_workers: 8
-train_batch_size: 1
+train_batch_size: 2
+gradient_accumulation_steps: 16
 checkpointing_epochs: -1
 checkpointing_steps:  1000
 
-mixed_precision_training: true
+mixed_precision_training: false
 global_seed: 42
 logger_interval: 10
 
