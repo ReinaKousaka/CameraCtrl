@@ -60,7 +60,7 @@ class PoseAdaptor(nn.Module):
         self.unet = unet
         self.pose_encoder = pose_encoder
 
-    def forward(self, noisy_latents, timesteps, encoder_hidden_states, pose_embedding, attention_mask):
+    def forward(self, noisy_latents, timesteps, encoder_hidden_states, pose_embedding, attention_mask_epipolar):
         assert pose_embedding.ndim == 5
         bs = pose_embedding.shape[0]            # b c f h w
         pose_embedding_features = self.pose_encoder(pose_embedding)      # bf c h w
@@ -70,7 +70,7 @@ class PoseAdaptor(nn.Module):
                                timesteps,
                                encoder_hidden_states,
                                pose_embedding_features=pose_embedding_features,
-                               attention_mask=attention_mask).sample
+                               attention_mask_epipolar=attention_mask_epipolar).sample
         return noise_pred
 
 

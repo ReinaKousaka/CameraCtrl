@@ -545,7 +545,8 @@ class EpipolarTransformerBlock(nn.Module):
         # 2. Prepare GLIGEN inputs
         cross_attention_kwargs = cross_attention_kwargs.copy() if cross_attention_kwargs is not None else {}
         gligen_kwargs = cross_attention_kwargs.pop("gligen", None)
-
+        # print(f'norm_hidden_states: {norm_hidden_states.shape}')
+        # print(f'attention_mask: {attention_mask[0].shape}')
         attn_output = self.attn5(
             norm_hidden_states,
             encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,

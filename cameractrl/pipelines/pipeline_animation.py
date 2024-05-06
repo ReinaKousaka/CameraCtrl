@@ -570,7 +570,8 @@ class CameraCtrlPipeline(AnimationPipeline):
     def __call__(
         self,
         prompt: Union[str, List[str]],
-        pose_embedding: torch.FloatTensor,
+        pose_embedding: torch.Tensor,
+        attention_mask_epipolar: torch.Tensor,
         video_length: Optional[int],
         height: Optional[int] = None,
         width: Optional[int] = None,
@@ -616,7 +617,7 @@ class CameraCtrlPipeline(AnimationPipeline):
             negative_prompt = negative_prompt if isinstance(negative_prompt, list) else [negative_prompt] * batch_size
         text_embeddings = self._encode_prompt(
             prompt, device, num_videos_per_prompt, do_classifier_free_guidance, negative_prompt
-        )           # [2bf, l, c]
+        ).half()           # [2bf, l, c]
 
         # Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -672,7 +673,7 @@ class CameraCtrlPipeline(AnimationPipeline):
                 noise_preds = []
                 for multidiff_step in range(multidiff_total_steps):
                     start_idx = multidiff_step * (single_model_length - multidiff_overlaps)
-                    latent_partial = latents[:, :, start_idx: start_idx + single_model_length].contiguous()
+                    latent_partial = latents[:, :, start_idx: start_idx + single_model_length].contiguous().half()
                     mask_full[:, :, start_idx: start_idx + single_model_length] += 1
 
                     if isinstance(pose_embedding, list):
@@ -680,14 +681,22 @@ class CameraCtrlPipeline(AnimationPipeline):
                     else:
                         pose_embedding_features_input = [x[:, :, start_idx: start_idx + single_model_length]
                                                          for x in pose_embedding_features]
-
+                    
                     # expand the latents if we are doing classifier free guidance
                     latent_model_input = torch.cat([latent_partial] * 2) if do_classifier_free_guidance else latent_partial   # [2b c f h w]
                     latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
+                    # TODO: fix bug
+                    # make batch size to 2
+                    # attention_mask_epipolar = list(map(lambda x: torch.cat([x, x]), attention_mask_epipolar))
+                    # attention_mask_epipolar = list(map(lambda x: x[:, :, start_idx: start_idx + single_model_length], attention_mask_epipolar))
                     # predict the noise residual
-                    noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings,
-                                           pose_embedding_features=pose_embedding_features_input).sample.to(dtype=latents_dtype)
+                    print(f'attn mask shape: {attention_mask_epipolar[0].shape}')                    
+                    noise_pred = self.unet(
+                        latent_partial, t, encoder_hidden_states=text_embeddings,
+                        pose_embedding_features=pose_embedding_features_input,
+                        attention_mask_epipolar=attention_mask_epipolar,
+                    ).sample.to(dtype=latents_dtype)
                     # perform guidance
                     if do_classifier_free_guidance:
                         noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)

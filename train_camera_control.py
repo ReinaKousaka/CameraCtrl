@@ -279,9 +279,10 @@ def main(name: str,
     # Get the validation dataset
     logger.info(f'Building validation datasets')
     validation_dataset = RealEstate10KPose(**validation_data)
+    VALIDATION_BATCH_SIZE = 1
     validation_dataloader = torch.utils.data.DataLoader(
         validation_dataset,
-        batch_size=1,
+        batch_size=VALIDATION_BATCH_SIZE,
         shuffle=False,
         num_workers=num_workers,
         pin_memory=True,
@@ -423,77 +424,85 @@ def main(name: str,
             plucker_embedding = batch["plucker_embedding"].half().to(device=local_rank)  # [b, f, 6, h, w]
             plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f h, w]
 
-            # attn mask
-            attn_masks = []
             # start_time = time.perf_counter()
-            for s in range(3):
-                w, h, t = latents.shape[4]//2**(s + 1), latents.shape[3]//2**(s + 1), latents.shape[2]
-                xs = torch.linspace(0, 1, steps=w)
-                ys = torch.linspace(0, 1, steps=h)
-                grid = torch.stack(
-                    torch.meshgrid(xs, ys, indexing='xy'), dim=-1).float().to(
-                        local_rank, non_blocking=True)
+            
+            def _calculate_attn_mask(intrinsics, extrinsics, batch_size):
+                """
+                intrinsics: B, 6
+                extrinsics: B, T, 4, 4
+                """
+                attn_masks = []
+                for s in range(3):
+                    w, h, t = latents.shape[4] // 2 ** (s + 1), latents.shape[3] // 2 ** (s + 1), latents.shape[2]
+                    xs = torch.linspace(0, 1, steps=w)
+                    ys = torch.linspace(0, 1, steps=h)
+                    grid = torch.stack(
+                        torch.meshgrid(xs, ys, indexing='xy'), dim=-1).float().to(
+                            local_rank, non_blocking=True)
 
-                grid = rearrange(grid, "h w c  -> (h w) c")
-                grid = grid.repeat(t, 1)
-                attn_mask = []
-                for b in range(bsz):
-                    k = torch.eye(3).float().to(
-                        local_rank, non_blocking=True)
-                    k[0, 0] = batch["intrinsics"][b][0]
-                    k[1, 1] = batch["intrinsics"][b][1]
-                    k[0, 2] = 0.5
-                    k[1, 2] = 0.5
-                    source_intrinsics = k
-                    source_intrinsics = source_intrinsics[None].repeat_interleave(t * w * h, 0)
+                    grid = rearrange(grid, "h w c  -> (h w) c")
+                    grid = grid.repeat(t, 1)
+                    attn_mask = []
+                    for b in range(batch_size):
+                        k = torch.eye(3).float().to(
+                            local_rank, non_blocking=True)
+                        k[0, 0] = intrinsics[b][0]
+                        k[1, 1] = intrinsics[b][1]
+                        k[0, 2] = 0.5
+                        k[1, 2] = 0.5
+                        source_intrinsics = k
+                        source_intrinsics = source_intrinsics[None].repeat_interleave(t * w * h, 0)
 
-                    source_extrinsics_all = []
-                    target_extrinsics_all = []
-                    for t1 in range(t):
-                        source_extrinsics = torch.inverse(batch['extrinsics'][b][t1].to(
-                            local_rank, non_blocking=True))
-                        source_extrinsics_all.append(source_extrinsics[None].repeat_interleave(w * h, 0))
-                        tmp_seq = []
-                        for t2 in range(t):
-                            target_extrinsics = torch.inverse(batch['extrinsics'][b][t2].to(
+                        source_extrinsics_all = []
+                        target_extrinsics_all = []
+                        for t1 in range(t):
+                            source_extrinsics = torch.inverse(extrinsics[b][t1].to(
                                 local_rank, non_blocking=True))
-                            tmp_seq.append(target_extrinsics[None])
-                        target_extrinsics_all.append(torch.cat(tmp_seq).repeat(w*h,1,1))
+                            source_extrinsics_all.append(source_extrinsics[None].repeat_interleave(w * h, 0))
+                            tmp_seq = []
+                            for t2 in range(t):
+                                target_extrinsics = torch.inverse(extrinsics[b][t2].to(
+                                    local_rank, non_blocking=True))
+                                tmp_seq.append(target_extrinsics[None])
+                            target_extrinsics_all.append(torch.cat(tmp_seq).repeat(w*h,1,1))
 
-                    source_extrinsics_all = torch.cat(source_extrinsics_all)
-                    target_extrinsics_all = torch.cat(target_extrinsics_all)
-                    origin, direction = get_world_rays(grid, source_extrinsics_all, source_intrinsics)
-                    origin = origin.repeat_interleave(t, 0)
-                    direction = direction.repeat_interleave(t, 0)
-                    source_intrinsics = source_intrinsics.repeat_interleave(t, 0)
-                    projection = project_rays(
-                                origin, direction, target_extrinsics_all, source_intrinsics
-                            )
+                        source_extrinsics_all = torch.cat(source_extrinsics_all)
+                        target_extrinsics_all = torch.cat(target_extrinsics_all)
+                        origin, direction = get_world_rays(grid, source_extrinsics_all, source_intrinsics)
+                        origin = origin.repeat_interleave(t, 0)
+                        direction = direction.repeat_interleave(t, 0)
+                        source_intrinsics = source_intrinsics.repeat_interleave(t, 0)
+                        projection = project_rays(
+                                    origin, direction, target_extrinsics_all, source_intrinsics
+                                )
 
-                    attn_image = torch.zeros((3, h, w)).to(
-                        local_rank, non_blocking=True)
+                        attn_image = torch.zeros((3, h, w)).to(
+                            local_rank, non_blocking=True)
 
-                    attn_image = draw_attn(
-                        attn_image,
-                        projection["xy_min"],
-                        projection["xy_max"],
-                        (1, 1, 1),
-                        8//2**s,
-                        x_range=(0, 1),
-                        y_range=(0, 1),)
-                    attn_image = attn_image.half()
-                    attn_image = rearrange(attn_image, '(t1 a t2) b-> (t1 a) (t2 b)', t1 =t, t2=t)
-                    attn_mask.append(attn_image)
-                attn_mask = torch.stack(attn_mask)
+                        attn_image = draw_attn(
+                            attn_image,
+                            projection["xy_min"],
+                            projection["xy_max"],
+                            (1, 1, 1),
+                            8 // 2 ** s,
+                            x_range=(0, 1),
+                            y_range=(0, 1),)
+                        attn_image = attn_image.half()
+                        attn_image = rearrange(attn_image, '(t1 a t2) b-> (t1 a) (t2 b)', t1 =t, t2=t)
+                        attn_mask.append(attn_image)
+                    attn_mask = torch.stack(attn_mask)
+                    attn_masks.append(attn_mask)
                 attn_masks.append(attn_mask)
-            attn_masks.append(attn_mask)
-            assert attn_masks is not None
+                return attn_masks
+            
+            attn_masks = _calculate_attn_mask(batch['intrinsics'], batch['extrinsics'], bsz)
+
             with torch.cuda.amp.autocast(enabled=mixed_precision_training):
                 model_pred = pose_adaptor(noisy_latents.half(),
                                           timesteps,
                                           encoder_hidden_states=encoder_hidden_states.half(),
                                           pose_embedding=plucker_embedding.half(),
-                                          attention_mask=attn_masks)  # [b c f h w]
+                                          attention_mask_epipolar=attn_masks)  # [b c f h w]
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -563,29 +572,33 @@ def main(name: str,
                                                                         int) else train_data.sample_size
 
                 validation_data_iter = iter(validation_dataloader)
+                print(f'------ valid ------')
+                for idx, validation_batch in enumerate(validation_data_iter):
+                    plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
+                    plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
+                    intrinsics = validation_batch['intrinsics'].to(device=unet.device)
+                    extrinsics = validation_batch['extrinsics'].to(device=unet.device)
+                    attention_mask = _calculate_attn_mask(intrinsics, extrinsics, VALIDATION_BATCH_SIZE)
 
-                # TODO: setup pipeline animation with attention mask
-                # for idx, validation_batch in enumerate(validation_data_iter):
-                #     plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
-                #     plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
-                #     sample = validation_pipeline(
-                #         prompt=validation_batch['text'],
-                #         pose_embedding=plucker_embedding,
-                #         video_length=video_length,
-                #         height=height,
-                #         width=width,
-                #         num_inference_steps=25,
-                #         guidance_scale=8.,
-                #         generator=generator,
-                #     ).videos[0]  # [3 f h w]
-                #     sample_gt = torch.cat([sample, (validation_batch['pixel_values'][0].permute(1, 0, 2, 3) + 1.0) / 2.0], dim=2)  # [3, f, 2h, w]
-                #     if 'clip_name' in validation_batch:
-                #         save_path = f"{output_dir}/samples/sample-{global_step}/{validation_batch['clip_name'][0]}.gif"
-                #     else:
-                #         save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
-                #     save_videos_grid(sample_gt[None, ...], save_path)
-                #     logger.info(f"Saved samples to {save_path}")
-                #     if idx == 6: break      # get 7 samples
+                    sample = validation_pipeline(
+                        prompt=validation_batch['text'],
+                        pose_embedding=plucker_embedding.half(),
+                        attention_mask_epipolar=attention_mask,
+                        video_length=video_length,
+                        height=height,
+                        width=width,
+                        num_inference_steps=25,
+                        guidance_scale=8.,
+                        generator=generator,
+                    ).videos[0]  # [3 f h w]
+                    sample_gt = torch.cat([sample, (validation_batch['pixel_values'][0].permute(1, 0, 2, 3) + 1.0) / 2.0], dim=2)  # [3, f, 2h, w]
+                    if 'clip_name' in validation_batch:
+                        save_path = f"{output_dir}/samples/sample-{global_step}/{validation_batch['clip_name'][0]}.gif"
+                    else:
+                        save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
+                    save_videos_grid(sample_gt[None, ...], save_path)
+                    logger.info(f"Saved samples to {save_path}")
+                    if idx == 6: break      # get 7 samples
 
             if (global_step % logger_interval) == 0 or global_step == 0:
                 gpu_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)

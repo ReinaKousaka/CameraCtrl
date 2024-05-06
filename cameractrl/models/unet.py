@@ -1066,6 +1066,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
             encoder_hidden_states: Union[torch.Tensor, List[torch.Tensor]],
             class_labels: Optional[torch.Tensor] = None,
             attention_mask: Optional[torch.Tensor] = None,
+            attention_mask_epipolar: Optional[List[torch.Tensor]] = None,
             cross_attention_kwargs: Optional[Dict[str, Any]] = None,
             pose_embedding_features: List[torch.Tensor] = None,
             return_dict: bool = True,
@@ -1091,9 +1092,9 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
             forward_upsample_size = True
 
         # prepare attention_mask
-        # if attention_mask is not None:
-        #     attention_mask = (1 - attention_mask.to(sample.dtype)) * -10000.0
-        #     attention_mask = attention_mask.unsqueeze(1)
+        if attention_mask is not None:
+            attention_mask = (1 - attention_mask.to(sample.dtype)) * -10000.0
+            attention_mask = attention_mask.unsqueeze(1)
 
         # center input if necessary1
         if self.config.center_input_sample:
@@ -1171,21 +1172,23 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                                                                                              motion_module_alphas[:-1]):
             i += 1
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
+                print(f'before down: {sample.shape}')
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
                     temb=emb,
                     encoder_hidden_states=encoder_hidden_states,
-                    # attention_mask=attention_mask,
+                    attention_mask=attention_mask,
                     motion_module_alpha=motion_module_alpha,
                     cross_attention_kwargs=cross_attention_kwargs.update({"pose_feature": pose_embedding_feature})
                     if cross_attention_kwargs is not None else {"pose_feature": pose_embedding_feature},
                     motion_cross_attention_kwargs={"pose_feature": pose_embedding_feature}
                 )
+                print(f'after down: {sample.shape}')
             else:
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
                     temb=emb,
-                    motion_module_alpha=motion_module_alpha,
+                    motion_module_axalpha=motion_module_alpha,
                     cross_attention_kwargs=cross_attention_kwargs.update({"pose_feature": pose_embedding_feature})
                     if cross_attention_kwargs is not None else {"pose_feature": pose_embedding_feature},
                     motion_cross_attention_kwargs={"pose_feature": pose_embedding_feature}
@@ -1205,10 +1208,9 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
 
             if self.epipolar[i]:
                 for epipolar_block in self.epipolar[i]:
-                    assert attention_mask is not None
                     sample = epipolar_block(
                         sample,
-                        attention_mask=attention_mask[i],
+                        attention_mask=attention_mask_epipolar[i] if attention_mask_epipolar is not None else None,
                         image_only_indicator=image_only_indicator,
                     )
 
