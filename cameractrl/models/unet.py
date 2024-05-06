@@ -846,7 +846,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         if logger is not None:
             logger.info(f"Motion module parameters: {sum(params) / 1e6} M")
 
-        return model
+        return model.half()
 
 
 class UNet3DConditionModelPoseCond(UNet3DConditionModel):
@@ -971,7 +971,6 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                 else:
                     spatial_attn_procs[name] = CustomizedAttnProcessor()
         elif (not add_spatial) and add_spatial_lora:
-            # print(f'attn_processors keys: {self.attn_processors.keys()}')
             for name in self.attn_processors.keys():
                 cross_attention_dim = None if name.endswith("attn1.processor") else self.config.cross_attention_dim
                 if name.startswith("mid_block"):

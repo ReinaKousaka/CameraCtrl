@@ -468,11 +468,6 @@ class EpipolarTransformerBlock(nn.Module):
         num_frames = image_only_indicator.shape[-1]
         # batch_size = batch_frames // num_frames
 
-        # batch_size, num_frames, height, width = hidden_states.shape
-
-        # TODO: confirm the shape
-        # hidden_states = rearrange(hidden_states, "b f c h w -> b (f h w) c", b = batch_size)
-        print(f'hidden states in forward: {hidden_states.shape}')
         hidden_states = rearrange(hidden_states, "b c f h w -> b (f h w) c", b = batch_size)
 
 
@@ -550,7 +545,7 @@ class EpipolarTransformerBlock(nn.Module):
         # 2. Prepare GLIGEN inputs
         cross_attention_kwargs = cross_attention_kwargs.copy() if cross_attention_kwargs is not None else {}
         gligen_kwargs = cross_attention_kwargs.pop("gligen", None)
-        print(f'norm hidden states: {norm_hidden_states.shape}\n attn mask: {attention_mask.shape}')
+
         attn_output = self.attn5(
             norm_hidden_states,
             encoder_hidden_states=encoder_hidden_states if self.only_cross_attention else None,

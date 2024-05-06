@@ -188,19 +188,19 @@ class CameraPoseEncoder(nn.Module):
                 if j == 0 and i != 0:
                     in_dim = channels[i - 1]
                     out_dim = int(channels[i] / compression_factor)
-                    conv_layer = ResnetBlock(in_dim, out_dim, down=True, ksize=ksize, sk=sk, use_conv=use_conv)
+                    conv_layer = ResnetBlock(in_dim, out_dim, down=True, ksize=ksize, sk=sk, use_conv=use_conv).half()
                 elif j == 0:
                     in_dim = channels[0]
                     out_dim = int(channels[i] / compression_factor)
-                    conv_layer = ResnetBlock(in_dim, out_dim, down=False, ksize=ksize, sk=sk, use_conv=use_conv)
+                    conv_layer = ResnetBlock(in_dim, out_dim, down=False, ksize=ksize, sk=sk, use_conv=use_conv).half()
                 elif j == nums_rb - 1:
                     in_dim = channels[i] / compression_factor
                     out_dim = channels[i]
-                    conv_layer = ResnetBlock(in_dim, out_dim, down=False, ksize=ksize, sk=sk, use_conv=use_conv)
+                    conv_layer = ResnetBlock(in_dim, out_dim, down=False, ksize=ksize, sk=sk, use_conv=use_conv).half()
                 else:
                     in_dim = int(channels[i] / compression_factor)
                     out_dim = int(channels[i] / compression_factor)
-                    conv_layer = ResnetBlock(in_dim, out_dim, down=False, ksize=ksize, sk=sk, use_conv=use_conv)
+                    conv_layer = ResnetBlock(in_dim, out_dim, down=False, ksize=ksize, sk=sk, use_conv=use_conv).half()
                 temporal_attention_layer = TemporalTransformerBlock(dim=out_dim,
                                                                     num_attention_heads=temporal_attention_nhead,
                                                                     attention_head_dim=int(out_dim / temporal_attention_nhead),
@@ -209,13 +209,13 @@ class CameraPoseEncoder(nn.Module):
                                                                     cross_attention_dim=None,
                                                                     temporal_position_encoding=temporal_position_encoding,
                                                                     temporal_position_encoding_max_len=temporal_position_encoding_max_len,
-                                                                    rescale_output_factor=rescale_output_factor)
+                                                                    rescale_output_factor=rescale_output_factor).half()
                 conv_layers.append(conv_layer)
                 temporal_attention_layers.append(temporal_attention_layer)
             self.encoder_down_conv_blocks.append(conv_layers)
             self.encoder_down_attention_blocks.append(temporal_attention_layers)
 
-        self.encoder_conv_in = nn.Conv2d(cin, channels[0], 3, 1, 1)
+        self.encoder_conv_in = nn.Conv2d(cin, channels[0], 3, 1, 1).half()
 
     @property
     def dtype(self) -> torch.dtype:
