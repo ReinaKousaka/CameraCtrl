@@ -427,7 +427,7 @@ def main(name: str,
             attn_masks = []
             # start_time = time.perf_counter()
             for s in range(3):
-                w, h, t = latents.shape[4]//2**(s+1), latents.shape[3]//2**(s+1), latents.shape[1]
+                w, h, t = latents.shape[4]//2**(s + 1), latents.shape[3]//2**(s + 1), latents.shape[2]
                 xs = torch.linspace(0, 1, steps=w)
                 ys = torch.linspace(0, 1, steps=h)
                 grid = torch.stack(
@@ -481,13 +481,13 @@ def main(name: str,
                         8//2**s,
                         x_range=(0, 1),
                         y_range=(0, 1),)
-                    attn_image = attn_image.half()
+                    attn_image = attn_image.float()     # modi1
                     attn_image = rearrange(attn_image, '(t1 a t2) b-> (t1 a) (t2 b)', t1 =t, t2=t)
                     attn_mask.append(attn_image)
                 attn_mask = torch.stack(attn_mask)
                 attn_masks.append(attn_mask)
             attn_masks.append(attn_mask)
-            
+            assert attn_masks is not None
             with torch.cuda.amp.autocast(enabled=mixed_precision_training):
                 model_pred = pose_adaptor(noisy_latents,
                                           timesteps,
@@ -564,27 +564,28 @@ def main(name: str,
 
                 validation_data_iter = iter(validation_dataloader)
 
-                for idx, validation_batch in enumerate(validation_data_iter):
-                    plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
-                    plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
-                    sample = validation_pipeline(
-                        prompt=validation_batch['text'],
-                        pose_embedding=plucker_embedding,
-                        video_length=video_length,
-                        height=height,
-                        width=width,
-                        num_inference_steps=25,
-                        guidance_scale=8.,
-                        generator=generator,
-                    ).videos[0]  # [3 f h w]
-                    sample_gt = torch.cat([sample, (validation_batch['pixel_values'][0].permute(1, 0, 2, 3) + 1.0) / 2.0], dim=2)  # [3, f, 2h, w]
-                    if 'clip_name' in validation_batch:
-                        save_path = f"{output_dir}/samples/sample-{global_step}/{validation_batch['clip_name'][0]}.gif"
-                    else:
-                        save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
-                    save_videos_grid(sample_gt[None, ...], save_path)
-                    logger.info(f"Saved samples to {save_path}")
-                    if idx == 6: break      # get 7 samples
+                # TODO: setup pipeline animation with attention mask
+                # for idx, validation_batch in enumerate(validation_data_iter):
+                #     plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
+                #     plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
+                #     sample = validation_pipeline(
+                #         prompt=validation_batch['text'],
+                #         pose_embedding=plucker_embedding,
+                #         video_length=video_length,
+                #         height=height,
+                #         width=width,
+                #         num_inference_steps=25,
+                #         guidance_scale=8.,
+                #         generator=generator,
+                #     ).videos[0]  # [3 f h w]
+                #     sample_gt = torch.cat([sample, (validation_batch['pixel_values'][0].permute(1, 0, 2, 3) + 1.0) / 2.0], dim=2)  # [3, f, 2h, w]
+                #     if 'clip_name' in validation_batch:
+                #         save_path = f"{output_dir}/samples/sample-{global_step}/{validation_batch['clip_name'][0]}.gif"
+                #     else:
+                #         save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
+                #     save_videos_grid(sample_gt[None, ...], save_path)
+                #     logger.info(f"Saved samples to {save_path}")
+                #     if idx == 6: break      # get 7 samples
 
             if (global_step % logger_interval) == 0 or global_step == 0:
                 gpu_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)

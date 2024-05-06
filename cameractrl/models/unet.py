@@ -1092,9 +1092,9 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
             forward_upsample_size = True
 
         # prepare attention_mask
-        if attention_mask is not None:
-            attention_mask = (1 - attention_mask.to(sample.dtype)) * -10000.0
-            attention_mask = attention_mask.unsqueeze(1)
+        # if attention_mask is not None:
+        #     attention_mask = (1 - attention_mask.to(sample.dtype)) * -10000.0
+        #     attention_mask = attention_mask.unsqueeze(1)
 
         # center input if necessary1
         if self.config.center_input_sample:
@@ -1176,7 +1176,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                     hidden_states=sample,
                     temb=emb,
                     encoder_hidden_states=encoder_hidden_states,
-                    attention_mask=attention_mask,
+                    # attention_mask=attention_mask,
                     motion_module_alpha=motion_module_alpha,
                     cross_attention_kwargs=cross_attention_kwargs.update({"pose_feature": pose_embedding_feature})
                     if cross_attention_kwargs is not None else {"pose_feature": pose_embedding_feature},
@@ -1206,10 +1206,10 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
 
             if self.epipolar[i]:
                 for epipolar_block in self.epipolar[i]:
+                    assert attention_mask is not None
                     sample = epipolar_block(
                         sample,
-                        # attention_mask=attention_mask[i],
-                        attention_mask=attention_mask,
+                        attention_mask=attention_mask[i],
                         image_only_indicator=image_only_indicator,
                     )
 

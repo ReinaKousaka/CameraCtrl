@@ -60,7 +60,7 @@ class PoseAdaptor(nn.Module):
         self.unet = unet
         self.pose_encoder = pose_encoder
 
-    def forward(self, noisy_latents, timesteps, encoder_hidden_states, pose_embedding):
+    def forward(self, noisy_latents, timesteps, encoder_hidden_states, pose_embedding, attention_mask):
         assert pose_embedding.ndim == 5
         bs = pose_embedding.shape[0]            # b c f h w
         pose_embedding_features = self.pose_encoder(pose_embedding)      # bf c h w
@@ -69,7 +69,8 @@ class PoseAdaptor(nn.Module):
         noise_pred = self.unet(noisy_latents,
                                timesteps,
                                encoder_hidden_states,
-                               pose_embedding_features=pose_embedding_features).sample
+                               pose_embedding_features=pose_embedding_features,
+                               attention_mask=attention_mask).sample
         return noise_pred
 
 
@@ -154,7 +155,7 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        x = x.half()
+        # x = x.half()
         x = x + self.pe[:, :x.size(1), ...]
         return self.dropout(x)
 
