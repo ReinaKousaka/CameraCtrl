@@ -332,7 +332,8 @@ class RealEstate10KPose(Dataset):
                                           flip_flag=flip_flag)[0].permute(0, 3, 1, 2).contiguous()
         # [V, H, W, 6] --> [V, 6, H, W]
 
-        return pixel_values, video_caption, plucker_embedding, flip_flag
+        return pixel_values, video_caption, plucker_embedding, \
+            plist[0][1: 7], torch.squeeze(c2w, dim=0), flip_flag
 
     def __len__(self):
         return self.length
@@ -340,7 +341,7 @@ class RealEstate10KPose(Dataset):
     def __getitem__(self, idx):
         while True:
             try:
-                video, video_caption, plucker_embedding, flip_flag = self.get_batch(idx)
+                video, video_caption, plucker_embedding, intrinsics, extrinsics, flip_flag = self.get_batch(idx)
                 break
 
             except Exception as e:
@@ -355,4 +356,12 @@ class RealEstate10KPose(Dataset):
                 video = transform(video)
         # pixel_values: t, c, h, w
         # plucker_embedding: t, 6, h, w
-        return dict(pixel_values=video, text=video_caption, plucker_embedding=plucker_embedding)
+        # intrinsics: 6,
+        # extrinsics: t, 4, 4
+        return dict(
+            pixel_values=video,
+            text=video_caption,
+            plucker_embedding=plucker_embedding,
+            intrinsics=intrinsics,
+            extrinsics=extrinsics,
+        )
