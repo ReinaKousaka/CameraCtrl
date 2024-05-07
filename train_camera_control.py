@@ -526,11 +526,13 @@ def main(name: str,
                 scaler.update()
             else:
                 loss.backward()
+                """ >>> gradient clipping >>> """
+                torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
+                                            max_grad_norm)
+                torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, unet.parameters()),
+                                            max_grad_norm)
+                """ <<< gradient clipping <<< """
                 if (batch_idx + 1) % gradient_accumulation_steps == 0 or (batch_idx + 1) == len(train_dataloader):
-                    """ >>> gradient clipping >>> """
-                    torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
-                                                max_grad_norm)
-                    """ <<< gradient clipping <<< """
                     optimizer.step()
             if (batch_idx + 1) % gradient_accumulation_steps == 0 or (batch_idx + 1) == len(train_dataloader):
                 lr_scheduler.step()
