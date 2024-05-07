@@ -666,6 +666,10 @@ class CameraCtrlPipeline(AnimationPipeline):
         else:
             pose_embedding_features = [torch.cat([x, x], dim=0) for x in pose_embedding_features] \
                 if do_classifier_free_guidance else pose_embedding_features  # [2b c f h w]
+        
+        # make batch size to 2
+        attention_mask_epipolar = list(map(lambda x: torch.cat([x, x]), attention_mask_epipolar))
+
         with self.progress_bar(total=num_inference_steps) as progress_bar:
             for i, t in enumerate(timesteps):
                 noise_pred_full = torch.zeros_like(latents).to(latents.device)
@@ -686,14 +690,11 @@ class CameraCtrlPipeline(AnimationPipeline):
                     latent_model_input = torch.cat([latent_partial] * 2) if do_classifier_free_guidance else latent_partial   # [2b c f h w]
                     latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
 
-                    # TODO: fix bug
-                    # make batch size to 2
-                    # attention_mask_epipolar = list(map(lambda x: torch.cat([x, x]), attention_mask_epipolar))
-                    # attention_mask_epipolar = list(map(lambda x: x[:, :, start_idx: start_idx + single_model_length], attention_mask_epipolar))
-                    # predict the noise residual
-                    print(f'attn mask shape: {attention_mask_epipolar[0].shape}')                    
+                    # predict the noise residual            
                     noise_pred = self.unet(
-                        latent_partial, t, encoder_hidden_states=text_embeddings,
+                        latent_model_input,
+                        t,
+                        encoder_hidden_states=text_embeddings,
                         pose_embedding_features=pose_embedding_features_input,
                         attention_mask_epipolar=attention_mask_epipolar,
                     ).sample.to(dtype=latents_dtype)

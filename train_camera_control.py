@@ -153,6 +153,7 @@ def main(name: str,
     noise_scheduler = DDIMScheduler(**OmegaConf.to_container(noise_scheduler_kwargs))
 
     vae = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae", variant="fp16")
+    vae = vae.half()
     tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_path, subfolder="tokenizer", variant="fp16")
     text_encoder = CLIPTextModel.from_pretrained(pretrained_model_path, subfolder="text_encoder", variant="fp16")
     unet = UNet3DConditionModelPoseCond.from_pretrained_2d(pretrained_model_path, subfolder=unet_subfolder,
@@ -391,7 +392,7 @@ def main(name: str,
             ### >>>> Training >>>> ###
 
             # Convert videos to latent space
-            pixel_values = batch["pixel_values"].to(local_rank)
+            pixel_values = batch["pixel_values"].half().to(local_rank)
             video_length = pixel_values.shape[1]
             with torch.no_grad():
                 pixel_values = rearrange(pixel_values, "b f c h w -> (b f) c h w")
@@ -572,7 +573,6 @@ def main(name: str,
                                                                         int) else train_data.sample_size
 
                 validation_data_iter = iter(validation_dataloader)
-                print(f'------ valid ------')
                 for idx, validation_batch in enumerate(validation_data_iter):
                     plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
                     plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")

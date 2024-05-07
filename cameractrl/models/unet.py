@@ -1172,7 +1172,6 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                                                                                              motion_module_alphas[:-1]):
             i += 1
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
-                print(f'before down: {sample.shape}')
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
                     temb=emb,
@@ -1183,7 +1182,6 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                     if cross_attention_kwargs is not None else {"pose_feature": pose_embedding_feature},
                     motion_cross_attention_kwargs={"pose_feature": pose_embedding_feature}
                 )
-                print(f'after down: {sample.shape}')
             else:
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
