@@ -152,10 +152,9 @@ def main(name: str,
     # Load scheduler, tokenizer and models.
     noise_scheduler = DDIMScheduler(**OmegaConf.to_container(noise_scheduler_kwargs))
 
-    vae = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae", variant="fp16")
-    vae = vae.half()
-    tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_path, subfolder="tokenizer", variant="fp16")
-    text_encoder = CLIPTextModel.from_pretrained(pretrained_model_path, subfolder="text_encoder", variant="fp16")
+    vae = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae")
+    tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_path, subfolder="tokenizer")
+    text_encoder = CLIPTextModel.from_pretrained(pretrained_model_path, subfolder="text_encoder")
     unet = UNet3DConditionModelPoseCond.from_pretrained_2d(pretrained_model_path, subfolder=unet_subfolder,
                                                            unet_additional_kwargs=unet_additional_kwargs)
     pose_encoder = CameraPoseEncoder(**pose_encoder_kwargs)
@@ -218,7 +217,7 @@ def main(name: str,
         if 'lora' in n:
             p.requires_grad = False
             logger.info(f'Setting the `requires_grad` of parameter {n} to false')
-    pose_adaptor = PoseAdaptor(unet, pose_encoder).half()
+    pose_adaptor = PoseAdaptor(unet, pose_encoder)
 
     for name, para in unet.named_parameters():
         if 'epipolar' in name:
@@ -379,7 +378,6 @@ def main(name: str,
             # Data batch sanity check
             if epoch == first_epoch and batch_idx == 0 and do_sanity_check:
                 pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
-                pixel_values = pixel_values.half()
                 pixel_values = rearrange(pixel_values, "b f c h w -> b c f h w")
                 for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
                     pixel_value = pixel_value[None, ...]
@@ -390,16 +388,16 @@ def main(name: str,
             ### >>>> Training >>>> ###
 
             # Convert videos to latent space
-            pixel_values = batch["pixel_values"].half().to(local_rank)
+            pixel_values = batch["pixel_values"].to(local_rank)
             video_length = pixel_values.shape[1]
             with torch.no_grad():
                 pixel_values = rearrange(pixel_values, "b f c h w -> (b f) c h w")
-                latents = vae.encode(pixel_values).latent_dist.sample().half()
+                latents = vae.encode(pixel_values).latent_dist.sample()
                 latents = rearrange(latents, "(b f) c h w -> b c f h w", f=video_length)
                 latents = latents * 0.18215
 
             # Sample noise that we'll add to the latents
-            noise = torch.randn_like(latents).half()  # [b, c, f, h, w]
+            noise = torch.randn_like(latents).float()  # [b, c, f, h, w]
             bsz = latents.shape[0]
 
             # Sample a random timestep for each video
@@ -408,7 +406,7 @@ def main(name: str,
 
             # Add noise to the latents according to the noise magnitude at each timestep
             # (this is the forward diffusion process)
-            noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps).half()  # [b, c, f h, w]
+            noisy_latents = noise_scheduler.add_noise(latents, noise, timesteps).float()  # [b, c, f h, w]
 
             # Get the text embedding for conditioning
             with torch.no_grad():
@@ -416,11 +414,11 @@ def main(name: str,
                     batch['text'], max_length=tokenizer.model_max_length, padding="max_length", truncation=True,
                     return_tensors="pt"
                 ).input_ids.to(latents.device)
-                encoder_hidden_states = text_encoder(prompt_ids)[0].half()  # b l c
+                encoder_hidden_states = text_encoder(prompt_ids)[0]  # b l c
 
             # Predict the noise residual and compute loss
             # Mixed-precision training
-            plucker_embedding = batch["plucker_embedding"].half().to(device=local_rank)  # [b, f, 6, h, w]
+            plucker_embedding = batch["plucker_embedding"].to(device=local_rank)  # [b, f, 6, h, w]
             plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f h, w]
 
             # start_time = time.perf_counter()
@@ -486,21 +484,20 @@ def main(name: str,
                             8 // 2 ** s,
                             x_range=(0, 1),
                             y_range=(0, 1),)
-                        attn_image = attn_image.half()
                         attn_image = rearrange(attn_image, '(t1 a t2) b-> (t1 a) (t2 b)', t1 =t, t2=t)
                         attn_mask.append(attn_image)
                     attn_mask = torch.stack(attn_mask)
-                    attn_masks.append(attn_mask)
-                attn_masks.append(attn_mask)
+                    attn_masks.append(attn_mask.float())
+                attn_masks.append(attn_mask.float())
                 return attn_masks
             
             attn_masks = _calculate_attn_mask(batch['intrinsics'], batch['extrinsics'], bsz)
 
             with torch.cuda.amp.autocast(enabled=mixed_precision_training):
-                model_pred = pose_adaptor(noisy_latents.half(),
+                model_pred = pose_adaptor(noisy_latents,
                                           timesteps,
-                                          encoder_hidden_states=encoder_hidden_states.half(),
-                                          pose_embedding=plucker_embedding.half(),
+                                          encoder_hidden_states=encoder_hidden_states,
+                                          pose_embedding=plucker_embedding,
                                           attention_mask_epipolar=attn_masks)  # [b c f h w]
 
                 # Get the target for loss depending on the prediction type
@@ -581,7 +578,7 @@ def main(name: str,
 
                     sample = validation_pipeline(
                         prompt=validation_batch['text'],
-                        pose_embedding=plucker_embedding.half(),
+                        pose_embedding=plucker_embedding,
                         attention_mask_epipolar=attention_mask,
                         video_length=video_length,
                         height=height,

@@ -617,7 +617,7 @@ class CameraCtrlPipeline(AnimationPipeline):
             negative_prompt = negative_prompt if isinstance(negative_prompt, list) else [negative_prompt] * batch_size
         text_embeddings = self._encode_prompt(
             prompt, device, num_videos_per_prompt, do_classifier_free_guidance, negative_prompt
-        ).half()           # [2bf, l, c]
+        )          # [2bf, l, c]
 
         # Prepare timesteps
         self.scheduler.set_timesteps(num_inference_steps, device=device)
@@ -677,7 +677,7 @@ class CameraCtrlPipeline(AnimationPipeline):
                 noise_preds = []
                 for multidiff_step in range(multidiff_total_steps):
                     start_idx = multidiff_step * (single_model_length - multidiff_overlaps)
-                    latent_partial = latents[:, :, start_idx: start_idx + single_model_length].contiguous().half()
+                    latent_partial = latents[:, :, start_idx: start_idx + single_model_length].contiguous()
                     mask_full[:, :, start_idx: start_idx + single_model_length] += 1
 
                     if isinstance(pose_embedding, list):

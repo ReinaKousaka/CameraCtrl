@@ -846,7 +846,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         if logger is not None:
             logger.info(f"Motion module parameters: {sum(params) / 1e6} M")
 
-        return model.half()
+        return model
 
 
 class UNet3DConditionModelPoseCond(UNet3DConditionModel):
