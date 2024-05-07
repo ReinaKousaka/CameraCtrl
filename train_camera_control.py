@@ -348,13 +348,16 @@ def main(name: str,
         # optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         pose_encoder_state_dict = ckpt['pose_encoder_state_dict']
         attention_processor_state_dict = ckpt['attention_processor_state_dict']
+        epipolar_layer_state_dict = ckpt['epipolar_layer_state_dict']
         pose_enc_m, pose_enc_u = pose_adaptor.module.pose_encoder.load_state_dict(pose_encoder_state_dict, strict=False)
         # import pdb
         # pdb.set_trace()
         assert len(pose_enc_m) == 0 and len(pose_enc_u) == 0
         _, attention_processor_u = pose_adaptor.module.unet.load_state_dict(attention_processor_state_dict, strict=False)
         assert len(attention_processor_u) == 0
-        logger.info(f"Loading the pose encoder and attention processor weights done.")
+        _, epipolar_u = pose_adaptor.module.unet.load_state_dict(epipolar_layer_state_dict, strict=False)
+        assert len(epipolar_u) == 0
+        logger.info(f"Loading the pose encoder and attention processor and epipolar weights done.")
         logger.info(f"Loading done, resuming training from the {global_step + 1}th iteration")
         lr_scheduler.last_epoch = first_epoch
     else:
@@ -546,55 +549,57 @@ def main(name: str,
                     "pose_encoder_state_dict": pose_adaptor.module.pose_encoder.state_dict(),
                     "attention_processor_state_dict": {k: v for k, v in unet.state_dict().items()
                                                        if k in attention_trainable_param_names},
-                    "optimizer_state_dict": optimizer.state_dict()
+                    "epipolar_layer_state_dict": {k: v for k, v in unet.state_dict().items()
+                                                    if k in epipolar_trainable_params_names},
+                    "optimizer_state_dict": optimizer.state_dict(),
                 }
                 torch.save(state_dict, os.path.join(save_path, f"checkpoint-step-{global_step}.ckpt"))
                 logger.info(f"Saved state to {save_path} (global_step: {global_step})")
 
             # Periodically validation
-            if is_main_process and (
-                    (global_step + 1) % validation_steps == 0 or (global_step + 1) in validation_steps_tuple):
-                generator = torch.Generator(device=latents.device)
-                generator.manual_seed(global_seed)
+            # if is_main_process and (
+            #         (global_step + 1) % validation_steps == 0 or (global_step + 1) in validation_steps_tuple):
+            #     generator = torch.Generator(device=latents.device)
+            #     generator.manual_seed(global_seed)
 
-                if isinstance(train_data, omegaconf.listconfig.ListConfig):
-                    height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else \
-                    train_data[0].sample_size
-                    width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else \
-                    train_data[0].sample_size
-                else:
-                    height = train_data.sample_size[0] if not isinstance(train_data.sample_size,
-                                                                         int) else train_data.sample_size
-                    width = train_data.sample_size[1] if not isinstance(train_data.sample_size,
-                                                                        int) else train_data.sample_size
+            #     if isinstance(train_data, omegaconf.listconfig.ListConfig):
+            #         height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else \
+            #         train_data[0].sample_size
+            #         width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else \
+            #         train_data[0].sample_size
+            #     else:
+            #         height = train_data.sample_size[0] if not isinstance(train_data.sample_size,
+            #                                                              int) else train_data.sample_size
+            #         width = train_data.sample_size[1] if not isinstance(train_data.sample_size,
+            #                                                             int) else train_data.sample_size
 
-                validation_data_iter = iter(validation_dataloader)
-                for idx, validation_batch in enumerate(validation_data_iter):
-                    plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
-                    plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
-                    intrinsics = validation_batch['intrinsics'].to(device=unet.device)
-                    extrinsics = validation_batch['extrinsics'].to(device=unet.device)
-                    attention_mask = _calculate_attn_mask(intrinsics, extrinsics, VALIDATION_BATCH_SIZE)
+            #     validation_data_iter = iter(validation_dataloader)
+            #     for idx, validation_batch in enumerate(validation_data_iter):
+            #         plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
+            #         plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
+            #         intrinsics = validation_batch['intrinsics'].to(device=unet.device)
+            #         extrinsics = validation_batch['extrinsics'].to(device=unet.device)
+            #         attention_mask = _calculate_attn_mask(intrinsics, extrinsics, VALIDATION_BATCH_SIZE)
 
-                    sample = validation_pipeline(
-                        prompt=validation_batch['text'],
-                        pose_embedding=plucker_embedding,
-                        attention_mask_epipolar=attention_mask,
-                        video_length=video_length,
-                        height=height,
-                        width=width,
-                        num_inference_steps=25,
-                        guidance_scale=8.,
-                        generator=generator,
-                    ).videos[0]  # [3 f h w]
-                    sample_gt = torch.cat([sample, (validation_batch['pixel_values'][0].permute(1, 0, 2, 3) + 1.0) / 2.0], dim=2)  # [3, f, 2h, w]
-                    if 'clip_name' in validation_batch:
-                        save_path = f"{output_dir}/samples/sample-{global_step}/{validation_batch['clip_name'][0]}.gif"
-                    else:
-                        save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
-                    save_videos_grid(sample_gt[None, ...], save_path)
-                    logger.info(f"Saved samples to {save_path}")
-                    if idx == 6: break      # get 7 samples
+            #         sample = validation_pipeline(
+            #             prompt=validation_batch['text'],
+            #             pose_embedding=plucker_embedding,
+            #             attention_mask_epipolar=attention_mask,
+            #             video_length=video_length,
+            #             height=height,
+            #             width=width,
+            #             num_inference_steps=25,
+            #             guidance_scale=8.,
+            #             generator=generator,
+            #         ).videos[0]  # [3 f h w]
+            #         sample_gt = torch.cat([sample, (validation_batch['pixel_values'][0].permute(1, 0, 2, 3) + 1.0) / 2.0], dim=2)  # [3, f, 2h, w]
+            #         if 'clip_name' in validation_batch:
+            #             save_path = f"{output_dir}/samples/sample-{global_step}/{validation_batch['clip_name'][0]}.gif"
+            #         else:
+            #             save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
+            #         save_videos_grid(sample_gt[None, ...], save_path)
+            #         logger.info(f"Saved samples to {save_path}")
+            #         if idx == 6: break      # get 7 samples
 
             if (global_step % logger_interval) == 0 or global_step == 0:
                 gpu_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)
