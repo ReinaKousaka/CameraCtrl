@@ -369,10 +369,8 @@ def main(name: str,
         train_dataloader.sampler.set_epoch(epoch)
         pose_adaptor.train()
 
-        for batch_idx, batch in enumerate(train_dataloader):
+        for batch_idx, batch in enumerate(train_dataloader, start=trained_iterations):
             print(f'global step: {global_step}')
-            # skip trained iterations
-            if batch_idx < trained_iterations: continue
             iter_start_time = time.time()
             data_end_time = time.time()
             if cfg_random_null_text:
@@ -557,7 +555,6 @@ def main(name: str,
             # Periodically validation
             if is_main_process and (
                     (global_step + 1) % validation_steps == 0 or (global_step + 1) in validation_steps_tuple):
-
                 generator = torch.Generator(device=latents.device)
                 generator.manual_seed(global_seed)
 
@@ -611,6 +608,8 @@ def main(name: str,
 
             if global_step >= max_train_steps:
                 break
+        
+        trained_iterations = 0
 
     dist.destroy_process_group()
 
