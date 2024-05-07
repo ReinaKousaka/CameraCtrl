@@ -781,7 +781,7 @@ class UpBlock3D(nn.Module):
 
         for resnet, motion_module in zip(self.resnets, self.motion_modules):
             # pop res hidden states
-            res_hidden_states = res_hidden_states_tuple[-1].half()
+            res_hidden_states = res_hidden_states_tuple[-1]
             res_hidden_states_tuple = res_hidden_states_tuple[:-1]
             hidden_states = torch.cat([hidden_states, res_hidden_states], dim=1)
 

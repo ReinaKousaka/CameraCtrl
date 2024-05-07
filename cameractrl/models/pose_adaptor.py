@@ -66,6 +66,7 @@ class PoseAdaptor(nn.Module):
         pose_embedding_features = self.pose_encoder(pose_embedding)      # bf c h w
         pose_embedding_features = [rearrange(x, '(b f) c h w -> b c f h w', b=bs)
                                    for x in pose_embedding_features]
+
         noise_pred = self.unet(noisy_latents,
                                timesteps,
                                encoder_hidden_states,
@@ -155,7 +156,6 @@ class PositionalEncoding(nn.Module):
         self.register_buffer('pe', pe)
 
     def forward(self, x):
-        # x = x.half()
         x = x + self.pe[:, :x.size(1), ...]
         return self.dropout(x)
 
@@ -188,19 +188,19 @@ class CameraPoseEncoder(nn.Module):
                 if j == 0 and i != 0:
                     in_dim = channels[i - 1]
                     out_dim = int(channels[i] / compression_factor)
-                    conv_layer = ResnetBlock(in_dim, out_dim, down=True, ksize=ksize, sk=sk, use_conv=use_conv).half()
+                    conv_layer = ResnetBlock(in_dim, out_dim, down=True, ksize=ksize, sk=sk, use_conv=use_conv)
                 elif j == 0:
                     in_dim = channels[0]
                     out_dim = int(channels[i] / compression_factor)
-                    conv_layer = ResnetBlock(in_dim, out_dim, down=False, ksize=ksize, sk=sk, use_conv=use_conv).half()
+                    conv_layer = ResnetBlock(in_dim, out_dim, down=False, ksize=ksize, sk=sk, use_conv=use_conv)
                 elif j == nums_rb - 1:
                     in_dim = channels[i] / compression_factor
                     out_dim = channels[i]
-                    conv_layer = ResnetBlock(in_dim, out_dim, down=False, ksize=ksize, sk=sk, use_conv=use_conv).half()
+                    conv_layer = ResnetBlock(in_dim, out_dim, down=False, ksize=ksize, sk=sk, use_conv=use_conv)
                 else:
                     in_dim = int(channels[i] / compression_factor)
                     out_dim = int(channels[i] / compression_factor)
-                    conv_layer = ResnetBlock(in_dim, out_dim, down=False, ksize=ksize, sk=sk, use_conv=use_conv).half()
+                    conv_layer = ResnetBlock(in_dim, out_dim, down=False, ksize=ksize, sk=sk, use_conv=use_conv)
                 temporal_attention_layer = TemporalTransformerBlock(dim=out_dim,
                                                                     num_attention_heads=temporal_attention_nhead,
                                                                     attention_head_dim=int(out_dim / temporal_attention_nhead),
@@ -209,13 +209,13 @@ class CameraPoseEncoder(nn.Module):
                                                                     cross_attention_dim=None,
                                                                     temporal_position_encoding=temporal_position_encoding,
                                                                     temporal_position_encoding_max_len=temporal_position_encoding_max_len,
-                                                                    rescale_output_factor=rescale_output_factor).half()
+                                                                    rescale_output_factor=rescale_output_factor)
                 conv_layers.append(conv_layer)
                 temporal_attention_layers.append(temporal_attention_layer)
             self.encoder_down_conv_blocks.append(conv_layers)
             self.encoder_down_attention_blocks.append(temporal_attention_layers)
 
-        self.encoder_conv_in = nn.Conv2d(cin, channels[0], 3, 1, 1).half()
+        self.encoder_conv_in = nn.Conv2d(cin, channels[0], 3, 1, 1)
 
     @property
     def dtype(self) -> torch.dtype:
@@ -239,5 +239,5 @@ class CameraPoseEncoder(nn.Module):
                 x = rearrange(x, '(b f) c h w -> (b h w) f c', b=bs)
                 x = attention_layer(x)
                 x = rearrange(x, '(b h w) f c -> (b f) c h w', h=h, w=w)
-            features.append(x.half())
+            features.append(x)
         return features
