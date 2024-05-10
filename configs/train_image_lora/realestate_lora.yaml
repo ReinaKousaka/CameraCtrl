@@ -1,31 +1,21 @@
 output_dir: "output/image_lora"
-pretrained_model_path: "[replace with SD1.5 root path]"
+pretrained_model_path: "./stable-diffusion-v1-5"
 unet_subfolder: "unet_webvidlora_v3"
 
 train_data:
-  root_path: "[replace RealEstate10K root path]"
-  annotation_json: "annotations/train.json"
-  sample_size: [256, 384]
+  num_frames: 8
+  sample_stride: 6
   is_image: true
 
 validation_data:
   prompts:
-    - "a kitchen with large windows overlooking a lake"
-    - "a hallway leading to a laundry room with a washer and dryer"
-    - "a bedroom with a bed, chair, and window blinds"
-    - "a living room with a couch, piano and tv"
-    - "a bathroom with a walk in shower and a bathtub"
-    - "a bedroom with an exercise bike and a bed"
-    - "a deck with chairs overlooking a wooded area"
-    - "the porch of a house is decorated with christmas lights"
-    - "a hallway with a staircase and a painting on the wall"
-    - "a large brown house with green grass and bushes"
-    - "a kitchen with white appliances and wooden cabinets"
-    - "a kitchen with wooden cabinets and counter tops"
-    - "a bedroom with a large bed and a chandelier"
-    - "a kitchen and dining room with hardwood floors"
-    - "a hallway leading to a bedroom and bathroom"
-    - "a dining room with a chandelier hanging from the ceiling"
+    - "take plate"
+    - "put down plate"
+    - "take paper"
+    - "squeeze cloth"
+    - "close bin"
+    - "close fridge"
+    - "cut pizza"
   num_inference_steps: 50
   guidance_scale: 8.
 
