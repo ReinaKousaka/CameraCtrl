@@ -14,7 +14,7 @@ class EpicKitchen(Dataset):
         image_subfolder = 'epic',
         meta_file = "EPIC_100_train.csv", 
         h = 256,
-        w = 384,
+        w = 448,
         num_frames=8,
         sample_stride=6,        # TODO: confirm appropriate sample stride
         is_image=False,         # set to true to return C, H, W instead of T, C, H, W
@@ -77,5 +77,5 @@ class EpicKitchen(Dataset):
 
         return {
             'pixel_values': pixels,     # T, C, H, W
-            'caption': narration,          # str
+            'caption': narration + " in the kitchen with hands, egocentric view, first person",          # str
         }

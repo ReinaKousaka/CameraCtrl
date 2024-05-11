@@ -9,13 +9,14 @@ train_data:
 
 validation_data:
   prompts:
-    - "take plate"
-    - "put down plate"
-    - "take paper"
-    - "squeeze cloth"
-    - "close bin"
-    - "close fridge"
-    - "cut pizza"
+    - "take plate in the kitchen with hands, egocentric view, first person"
+    - "put down plate in the kitchen with hands, egocentric view, first person"
+    - "take paper in the kitchen with hands, egocentric view, first person"
+    - "squeeze cloth in the kitchen with hands, egocentric view, first person"
+    - "close bin in the kitchen with hands, egocentric view, first person"
+    - "close fridge in the kitchen with hands, egocentric view, first person"
+    - "cut pizza in the kitchen with hands, egocentric view, first person"
+    - "move chair in the kitchen with hands, egocentric view, first person"
   num_inference_steps: 50
   guidance_scale: 8.
 
@@ -38,8 +39,8 @@ learning_rate:    1.e-4
 lora_rank: 2
 
 num_workers: 8
-train_batch_size: 8
-gradient_accumulation_steps: 32
+train_batch_size: 16
+gradient_accumulation_steps: 16
 
 checkpointing_epochs: -1
 checkpointing_steps:  2000

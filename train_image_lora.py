@@ -35,7 +35,7 @@ from cameractrl.data.dataset_epic import EpicKitchen
 from cameractrl.utils.util import setup_logger, format_time
 
 
-def init_dist(launcher="slurm", backend='nccl', port=29500, **kwargs):
+def init_dist(launcher="pytorch", backend='nccl', port=29500, **kwargs):
     """Initializes distributed environment."""
     if launcher == 'pytorch':
         rank = int(os.environ['RANK'])
@@ -395,13 +395,15 @@ def main(name: str,
                 generator = torch.Generator(device=latents.device)
                 generator.manual_seed(global_seed)
 
-                if isinstance(train_data, omegaconf.listconfig.ListConfig):
-                    height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else train_data[0].sample_size
-                    width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else train_data[0].sample_size
-                else:
-                    height = train_data.sample_size[0] if not isinstance(train_data.sample_size, int) else train_data.sample_size
-                    width = train_data.sample_size[1] if not isinstance(train_data.sample_size, int) else train_data.sample_size
+                # if isinstance(train_data, omegaconf.listconfig.ListConfig):
+                #     height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else train_data[0].sample_size
+                #     width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else train_data[0].sample_size
+                # else:
+                #     height = train_data.sample_size[0] if not isinstance(train_data.sample_size, int) else train_data.sample_size
+                #     width = train_data.sample_size[1] if not isinstance(train_data.sample_size, int) else train_data.sample_size
 
+                height = 256
+                width = 384
                 prompts = validation_data.prompts
 
                 for idx, prompt in enumerate(prompts):
