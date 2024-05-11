@@ -37,7 +37,7 @@ from cameractrl.utils.util import setup_logger, format_time
 def init_dist(launcher="pytorch", backend='nccl', port=29500, **kwargs):
     """Initializes distributed environment."""
     if launcher == 'pytorch':
-        rank = int(os.envi ron['RANK'])
+        rank = int(os.environ['RANK'])
         num_gpus = torch.cuda.device_count()
         local_rank = rank % num_gpus
         torch.cuda.set_device(local_rank)
