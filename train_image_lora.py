@@ -37,7 +37,7 @@ from cameractrl.utils.util import setup_logger, format_time
 def init_dist(launcher="pytorch", backend='nccl', port=29500, **kwargs):
     """Initializes distributed environment."""
     if launcher == 'pytorch':
-        rank = int(os.environ['RANK'])
+        rank = int(os.envi ron['RANK'])
         num_gpus = torch.cuda.device_count()
         local_rank = rank % num_gpus
         torch.cuda.set_device(local_rank)
@@ -353,7 +353,7 @@ def main(name: str,
             with torch.cuda.amp.autocast(enabled=mixed_precision_training):
                 model_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
                 loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-
+                loss /= gradient_accumulation_steps
             # Backpropagate
             if mixed_precision_training:
                 scaler.scale(loss).backward()
@@ -368,11 +368,13 @@ def main(name: str,
                 """ >>> gradient clipping >>> """
                 torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, unet.parameters()), max_grad_norm)
                 """ <<< gradient clipping <<< """
-                optimizer.step()
+                if (step + 1) % gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
+                    optimizer.step()
 
-            lr_scheduler.step()
-            optimizer.zero_grad(set_to_none=True)
-            # progress_bar.update(1)
+            if (step + 1) % gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
+                lr_scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
+                # progress_bar.update(1)
             global_step += 1
             iter_end_time = time.time()
 
