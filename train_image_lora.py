@@ -31,6 +31,7 @@ from diffusers.utils.import_utils import is_xformers_available
 from transformers import CLIPTextModel, CLIPTokenizer
 
 from cameractrl.data.dataset import RealEstate10KPose
+from cameractrl.data.dataset_epic import EpicKitchen
 from cameractrl.utils.util import setup_logger, format_time
 
 
@@ -208,7 +209,7 @@ def main(name: str,
     text_encoder.to(local_rank)
 
     # Get the training dataset
-    train_dataset = RealEstate10KPose(**train_data)
+    train_dataset = EpicKitchen(**train_data)
     distributed_sampler = DistributedSampler(
         train_dataset,
         num_replicas=num_processes,
