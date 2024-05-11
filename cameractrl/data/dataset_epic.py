@@ -21,7 +21,7 @@ def _get_extrinsic_matrix(qw, qx, qy, qz, tx, ty, tz) -> torch.Tensor:
     r = Rotation.from_quat([qw, qx, qy, qz]).as_matrix()
     extrinsic[:3, :3] = r
     extrinsic[:3, 3] = [tx, ty, tz]
-    return torch.from_numpy(extrinsic)
+    return torch.from_numpy(extrinsic).float()
 
 
 def _get_rays(H, W, intrinsics, c2w):
@@ -127,29 +127,36 @@ class EpicKitchen(Dataset):
         return len(self.datalist)
 
     def __getitem__(self, index):
-        video_id, start_frame, end_frame, narration = self.datalist[index]
-        if start_frame + (self.num_frames - 1) * self.sample_stride < end_frame:
-            indices = [x for x in range(start_frame, end_frame + 1, self.sample_stride)][:self.num_frames]
-        else:
-            indices = random.sample(range(start_frame, end_frame + 1), self.num_frames)
-        assert len(indices) == self.num_frames
-        
-        pixels = []
-        extrinsics = []
-        intrinsics = torch.zeros(6)
-        for i in indices:
-            filename = f'frame_{str(i).zfill(10)}.jpg'
+        while True:
+            try:
+                video_id, start_frame, end_frame, narration = self.datalist[index]
+                if start_frame + (self.num_frames - 1) * self.sample_stride < end_frame:
+                    indices = [x for x in range(start_frame, end_frame + 1, self.sample_stride)][:self.num_frames]
+                else:
+                    indices = random.sample(range(start_frame, end_frame + 1), self.num_frames)
+                assert len(indices) == self.num_frames
+                
+                pixels = []
+                extrinsics = []
+                intrinsics = torch.zeros(6)
+                for i in indices:
+                    filename = f'frame_{str(i).zfill(10)}'
 
-            # get pixels
-            with Image.open(os.path.join(self.root, self.image_subfolder, video_id, filename)) as img:
-                pixels.append(self.transformer(img))
-            
-            # get camera poses
-            with open(os.path.join(self.root, self.posefile_subfolder, video_id, filename)) as f:
-                data = json.load(f)
-                extrinsics.append(_get_extrinsic_matrix(*data['images'][filename]))
-                if i == indices[0]:
-                    intrinsics[:4] = data['camera']['params'][:4]
+                    # get pixels
+                    with Image.open(os.path.join(self.root, self.image_subfolder, video_id, filename + '.jpg')) as img:
+                        pixels.append(self.transformer(img))
+                    
+                    # get camera poses
+                    with open(os.path.join(self.root, self.posefile_subfolder, video_id + '.json')) as f:
+                        data = json.load(f)
+                        extrinsics.append(_get_extrinsic_matrix(*data['images'][filename + '.jpg']))
+                        if i == indices[0]:
+                            for j in range(4):
+                                intrinsics[j] = data['camera']['params'][j]
+                break
+            except Exception as err:
+                # skip if the corresponding camera pose is missing, get a random idx instead
+                index = random.randint(0, self.__len__() - 1)
         pixels = torch.stack(pixels, dim = 0)
         extrinsics = torch.stack(extrinsics, dim = 0)
 
