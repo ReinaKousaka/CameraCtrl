@@ -9,14 +9,14 @@ train_data:
 
 validation_data:
   prompts:
-    - "take plate in the kitchen with hands, egocentric view, first person"
-    - "put down plate in the kitchen with hands, egocentric view, first person"
-    - "take paper in the kitchen with hands, egocentric view, first person"
-    - "squeeze cloth in the kitchen with hands, egocentric view, first person"
-    - "close bin in the kitchen with hands, egocentric view, first person"
-    - "close fridge in the kitchen with hands, egocentric view, first person"
-    - "cut pizza in the kitchen with hands, egocentric view, first person"
-    - "move chair in the kitchen with hands, egocentric view, first person"
+    - "take plate"
+    - "put down plate"
+    - "take paper"
+    - "squeeze cloth"
+    - "close bin"
+    - "close fridge"
+    - "cut pizza"
+    - "move chair"
   num_inference_steps: 50
   guidance_scale: 8.
 
