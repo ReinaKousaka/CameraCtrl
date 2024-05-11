@@ -18,9 +18,17 @@ def _get_extrinsic_matrix(qw, qx, qy, qz, tx, ty, tz) -> torch.Tensor:
     Args: quaternion and translation
     """
     extrinsic = np.eye(4)
-    r = Rotation.from_quat([qw, qx, qy, qz]).as_matrix()
+    # note the order: https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.transform.Rotation.from_quat.html#scipy.spatial.transform.Rotation.from_quat
+    r = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
+    
+    # R = Rotation.from_quat([qx, qy, qz, qw]).as_euler('xyz')
+    # R[1] *= -1
+    # R[2] *= -1
+    # r = Rotation.from_euler('xyz', R).as_matrix()
     extrinsic[:3, :3] = r
+    # extrinsic[:3, 3] = [tx, -ty, -tz]
     extrinsic[:3, 3] = [tx, ty, tz]
+
     return torch.from_numpy(extrinsic).float()
 
 
@@ -81,7 +89,7 @@ class EpicKitchen(Dataset):
         h = 256,
         w = 448,
         num_frames=8,
-        sample_stride=6,        # TODO: confirm appropriate sample stride
+        sample_stride=4,
         is_image=False,         # set to true to return C, H, W instead of T, C, H, W
     ):
         """Define EpicKiten Dataset
