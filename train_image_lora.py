@@ -35,7 +35,7 @@ from cameractrl.data.dataset_epic import EpicKitchen
 from cameractrl.utils.util import setup_logger, format_time
 
 
-def init_dist(launcher="pytorch", backend='nccl', port=29500, **kwargs):
+def init_dist(launcher="slurm", backend='nccl', port=29500, **kwargs):
     """Initializes distributed environment."""
     if launcher == 'pytorch':
         rank = int(os.environ['RANK'])
@@ -114,14 +114,11 @@ def main(name: str,
          resume_from: str = None
 ):
     check_min_version("0.10.0.dev0")
-    print(f'launcher is {launcher}, lora rank: {lora_rank}')
 
     # Initialize distributed training
     local_rank      = init_dist(launcher=launcher, port=port)
     global_rank     = dist.get_rank()
     num_processes   = dist.get_world_size()
-    # local_rank = global_rank = 0
-    # num_processes = 1
     is_main_process = global_rank == 0
 
     seed = global_seed + global_rank
@@ -303,11 +300,11 @@ def main(name: str,
             batch = next(data_iter)
             data_end_time = time.time()
             if cfg_random_null_text:
-                batch['text'] = [name if random.random() > cfg_random_null_text_ratio else "" for name in batch['text']]
+                batch['caption'] = [name if random.random() > cfg_random_null_text_ratio else "" for name in batch['caption']]
 
             # Data batch sanity check
             if epoch == first_epoch and step == 0 and do_sanity_check:
-                pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
+                pixel_values, texts = batch['pixel_values'].cpu(), batch['caption']
                 for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
                     pixel_value = pixel_value / 2. + 0.5
                     torchvision.utils.save_image(pixel_value, f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.png")
@@ -337,7 +334,7 @@ def main(name: str,
             # Get the text embedding for conditioning
             with torch.no_grad():
                 prompt_ids = tokenizer(
-                    batch['text'], max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+                    batch['caption'], max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
                 ).input_ids.to(latents.device)
                 encoder_hidden_states = text_encoder(prompt_ids)[0]
 
@@ -354,7 +351,7 @@ def main(name: str,
             with torch.cuda.amp.autocast(enabled=mixed_precision_training):
                 model_pred = unet(noisy_latents, timesteps, encoder_hidden_states).sample
                 loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
-                loss /= gradient_accumulation_steps
+
             # Backpropagate
             if mixed_precision_training:
                 scaler.scale(loss).backward()
