@@ -116,9 +116,11 @@ def main(name: str,
     check_min_version("0.10.0.dev0")
 
     # Initialize distributed training
-    local_rank      = init_dist(launcher=launcher, port=port)
-    global_rank     = dist.get_rank()
-    num_processes   = dist.get_world_size()
+    # local_rank      = init_dist(launcher=launcher, port=port)
+    # global_rank     = dist.get_rank()
+    # num_processes   = dist.get_world_size()
+    local_rank = global_rank = 0
+    num_processes = 1
     is_main_process = global_rank == 0
 
     seed = global_seed + global_rank
@@ -270,7 +272,7 @@ def main(name: str,
 
     # DDP warpper
     unet.to(local_rank)
-    unet = DDP(unet, device_ids=[local_rank], output_device=local_rank)
+    # unet = DDP(unet, device_ids=[local_rank], output_device=local_rank)
 
     if resume_from is not None:
         logger.info(f"Resuming the training from the checkpoint: {resume_from}")
@@ -403,7 +405,7 @@ def main(name: str,
                 #     width = train_data.sample_size[1] if not isinstance(train_data.sample_size, int) else train_data.sample_size
 
                 height = 256
-                width = 384
+                width = 448
                 prompts = validation_data.prompts
 
                 for idx, prompt in enumerate(prompts):
