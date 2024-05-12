@@ -4,8 +4,6 @@ import csv
 import json
 import numpy as np
 from PIL import Image
-from scipy.spatial.transform import Rotation
-from packaging import version as pver
 
 import torch
 import torchvision.transforms as transforms
@@ -13,20 +11,35 @@ from torch.utils.data.dataset import Dataset
 from torch.nn import functional as F
 
 
+def qvec2rotmat(qvec):
+    return np.array(
+        [
+            [
+                1 - 2 * qvec[2] ** 2 - 2 * qvec[3] ** 2,
+                2 * qvec[1] * qvec[2] - 2 * qvec[0] * qvec[3],
+                2 * qvec[3] * qvec[1] + 2 * qvec[0] * qvec[2],
+            ],
+            [
+                2 * qvec[1] * qvec[2] + 2 * qvec[0] * qvec[3],
+                1 - 2 * qvec[1] ** 2 - 2 * qvec[3] ** 2,
+                2 * qvec[2] * qvec[3] - 2 * qvec[0] * qvec[1],
+            ],
+            [
+                2 * qvec[3] * qvec[1] - 2 * qvec[0] * qvec[2],
+                2 * qvec[2] * qvec[3] + 2 * qvec[0] * qvec[1],
+                1 - 2 * qvec[1] ** 2 - 2 * qvec[2] ** 2,
+            ],
+        ]
+    )
+
+
 def _get_extrinsic_matrix(qw, qx, qy, qz, tx, ty, tz) -> torch.Tensor:
     """
     Args: quaternion and translation
     """
     extrinsic = np.eye(4)
-    # note the order: https://docs.scipy.org/doc/scipy/reference/generated/scipy.spatial.transform.Rotation.from_quat.html#scipy.spatial.transform.Rotation.from_quat
-    r = Rotation.from_quat([qx, qy, qz, qw]).as_matrix()
-    
-    # R = Rotation.from_quat([qx, qy, qz, qw]).as_euler('xyz')
-    # R[1] *= -1
-    # R[2] *= -1
-    # r = Rotation.from_euler('xyz', R).as_matrix()
+    r = qvec2rotmat([qx, qy, qz, qw])
     extrinsic[:3, :3] = r
-    # extrinsic[:3, 3] = [tx, -ty, -tz]
     extrinsic[:3, 3] = [tx, ty, tz]
 
     return torch.from_numpy(extrinsic).float()

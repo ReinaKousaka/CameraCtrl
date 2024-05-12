@@ -16,12 +16,6 @@ from cameractrl.visualization.layout import add_border, hcat
 from torchvision.utils import save_image
 
 
-# print(data['pixel_values'].shape)
-# print(data['caption'])
-# print(data['intrinsics'])
-# print(data['extrinsics'].shape)
-# print(data['plucker_embedding'].shape)
-
 def helper(data, name):
     device = 0
     tmp = data
@@ -40,48 +34,32 @@ def helper(data, name):
     source_image = tmp['pixel_values'][0].to(("cuda:0"))
     target_image = tmp['pixel_values'][frame2].to(("cuda:0"))
 
-
-    print(tmp['intrinsics'])
     k = torch.tensor(np.identity(3)).float()
     k[0, 0] = tmp['intrinsics'][0] / 456.0
     k[1, 1] = tmp['intrinsics'][1] / 256.0
     k[0, 2] = 0.5
     k[1, 2] = 0.5
-    # k[0, 2] = tmp['intrinsics'][2]
-    # k[1, 2] = tmp['intrinsics'][3]
 
     target_intrinsics = source_intrinsics = k.to(("cuda:0"))
 
-    def _flip_y_z(extrinsic):
-        T = torch.tensor([
-            [1, 0, 0],
-            [0, -1, 0],
-            [0, 0, -1]
-        ]).float().to(extrinsic.device)
-        extrinsic[:3, :3] = extrinsic[:3, :3] @ T
-        extrinsic[1, 3] *= -1
-        extrinsic[2, 3] *= -1
-        return extrinsic
-
     source_extrinsics = tmp['extrinsics'][0].to(("cuda:0"))
-    # source_extrinsics = _flip_y_z(source_extrinsics)
+    source_extrinsics = torch.inverse(source_extrinsics)
+
     origin, direction = get_world_rays(
         grid,
         source_extrinsics,
-        # torch.inverse(source_extrinsics),
         source_intrinsics
     )
     target_extrinsics = tmp['extrinsics'][frame2].to(("cuda:0"))
-    # target_extrinsics = _flip_y_z(target_extrinsics)
+    target_extrinsics = torch.inverse(target_extrinsics)
+
 
     projection = project_rays(
         origin,
         direction,
         target_extrinsics,
-        # torch.inverse(target_extrinsics),
         source_intrinsics,
     )
-
 
     for i in range(28):
         color = (random.uniform(0, 1), random.uniform(0, 1), random.uniform(0, 1))
@@ -103,7 +81,7 @@ def helper(data, name):
     source_image = add_label(source_image, "Source")
     target_image = add_label(target_image, "Target")
     together = add_border(hcat(source_image, target_image))
-    # i = 0
+    
     print(f'together shape: {together.shape}')
     save_image(together, f'./output_draw/{name}.png')
 
