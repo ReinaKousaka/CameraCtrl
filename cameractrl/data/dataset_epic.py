@@ -95,7 +95,7 @@ def _get_plucker_embedding(H, W, intrinsics, c2w):
 
 class EpicKitchen(Dataset):
     def __init__(self,
-        root = '/root/CameraCtrl/Epic',
+        root = '/root/workspace/CameraCtrl/Epic',
         image_subfolder = 'epic',
         posefile_subfolder = 'pose',
         meta_file = "EPIC_100_train.csv", 
@@ -133,6 +133,30 @@ class EpicKitchen(Dataset):
         
         self._check_from_data()
 
+        # The following snippet is to save frame_to_ex.json
+        # self.frame_to_ex = {}
+        # with open(os.path.join(root, 'epic_cam-pre.json')) as f:
+        #     data = json.load(f)
+        #     for chunk in data:
+        #         narration = chunk[0]   
+        #         for piece in chunk[1]:
+        #             path = piece[0]
+        #             path = os.path.join(root, image_subfolder, path[26:])
+        #             # extrinsic = torch.tensor(piece[1]).float()
+        #             extrinsic = piece[1]
+        #             # self.datalist2.append((narration, path, extrinsic))
+        #             splits = path.split('/')
+        #             if splits[-2] not in self.frame_to_ex:
+        #                 self.frame_to_ex[splits[-2]] = {}
+        #             self.frame_to_ex[splits[-2]][splits[-1]] = extrinsic
+        # with open(os.path.join(root, 'frame_to_ex.json'), 'w') as f:
+        #     # self.frame_to_ex = json.load(f)
+        #     json.dump(self.frame_to_ex, f)
+        # exit(0)
+
+        with open(os.path.join(root, 'frame_to_ex.json')) as f:
+            self.frame_to_ex = json.load(f)
+
     def _check_from_data(self):
         for line in self.meta_file:
             video_id = line[2]
@@ -168,12 +192,13 @@ class EpicKitchen(Dataset):
                         pixels.append(self.transformer(img))
                     
                     # get camera poses
-                    with open(os.path.join(self.root, self.posefile_subfolder, video_id + '.json')) as f:
-                        data = json.load(f)
-                        extrinsics.append(_get_extrinsic_matrix(*data['images'][filename + '.jpg']))
-                        if i == indices[0]:
-                            for j in range(4):
-                                intrinsics[j] = data['camera']['params'][j]
+                    extrinsics.append(torch.tensor(self.frame_to_ex[video_id][filename + '.jpg']).float())
+                    # extrinsics.append(_get_extrinsic_matrix(*data['images'][filename + '.jpg']))
+
+                with open(os.path.join(self.root, self.posefile_subfolder, video_id + '.json')) as f:
+                    data = json.load(f)
+                    for j in range(4):
+                        intrinsics[j] = data['camera']['params'][j]
                 break
             except Exception as err:
                 # skip if the corresponding camera pose is missing, get a random idx instead

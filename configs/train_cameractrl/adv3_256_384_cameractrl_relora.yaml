@@ -3,30 +3,14 @@ pretrained_model_path: "./stable-diffusion-v1-5"
 unet_subfolder: "unet_webvidlora_v3"
 
 train_data:
-  root_path:       "/media/wei/fast/realstate"
-  sample_stride: 8
-  sample_n_frames: 6
-  relative_pose: true
-  zero_t_first_frame: true
-  sample_size: [256, 384]
-  rescale_fxy: true
-  shuffle_frames: true
-  use_flip: true
+  root:       "/root/workspace/CameraCtrl/Epic"
+  meta_file:  "EPIC_100_train.csv"
+  num_frames: 8
 
 validation_data:
-  root_path:       "/media/wei/fast/realstate"
-  frame_dir:      "./test"
-  image_json:     "test.json"
-  caption_json:   "test_captions.json"
-  pose_mat:       "test.mat"
-  sample_stride: 8
-  sample_n_frames: 6
-  relative_pose: true
-  zero_t_first_frame: true
-  sample_size: [256, 384]
-  rescale_fxy: true
-  shuffle_frames: false
-  use_flip: false
+  root:       "/root/workspace/CameraCtrl/Epic"
+  meta_file:  "EPIC_100_validation.csv"
+  num_frames: 8
 
 unet_additional_kwargs:
   use_motion_module              : true
@@ -47,7 +31,7 @@ unet_additional_kwargs:
 
 lora_rank: 2
 lora_scale: 1.0
-lora_ckpt: "./RealEstate10K_LoRA.ckpt"
+lora_ckpt: "./EpicKitchen_LoRA.ckpt"
 motion_module_ckpt: "./v3_sd15_mm.ckpt"
 
 pose_encoder_kwargs:

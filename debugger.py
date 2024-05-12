@@ -35,14 +35,16 @@ def helper(data, name):
     target_image = tmp['pixel_values'][frame2].to(("cuda:0"))
 
     k = torch.tensor(np.identity(3)).float()
-    k[0, 0] = tmp['intrinsics'][0] / 456.0
-    k[1, 1] = tmp['intrinsics'][1] / 256.0
+    k[0, 0] = tmp['intrinsics'][1] / 456.0
+    k[1, 1] = tmp['intrinsics'][0] / 256.0
     k[0, 2] = 0.5
     k[1, 2] = 0.5
 
     target_intrinsics = source_intrinsics = k.to(("cuda:0"))
-
+    print(f'in: {target_intrinsics}')
     source_extrinsics = tmp['extrinsics'][0].to(("cuda:0"))
+
+    print(f'src ex: {source_extrinsics}')
     source_extrinsics = torch.inverse(source_extrinsics)
 
     origin, direction = get_world_rays(
@@ -51,6 +53,8 @@ def helper(data, name):
         source_intrinsics
     )
     target_extrinsics = tmp['extrinsics'][frame2].to(("cuda:0"))
+
+    print(f'tar ex: {source_extrinsics}')
     target_extrinsics = torch.inverse(target_extrinsics)
 
 
@@ -82,12 +86,11 @@ def helper(data, name):
     target_image = add_label(target_image, "Target")
     together = add_border(hcat(source_image, target_image))
     
-    print(f'together shape: {together.shape}')
     save_image(together, f'./output_draw/{name}.png')
 
 
 
 ds = EpicKitchen()
-helper(ds[8900], 0)
-helper(ds[700], 1)
-helper(ds[2000], 2)
+# helper(ds[8900], 00)
+# helper(ds[400], 1)
+helper(ds[2700], '22')
