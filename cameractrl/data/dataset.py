@@ -220,18 +220,12 @@ class RealEstate10KPose(Dataset):
         sample_size = tuple(sample_size) if not isinstance(sample_size, int) else (sample_size, sample_size)
         self.sample_size = sample_size
         self.w, self.h = sample_size
-        if use_flip:
-            pixel_transforms = [transforms.Resize(sample_size),
-                                RandomHorizontalFlipWithPose(),
-                                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)]
-        else:
-            pixel_transforms = [transforms.Resize(sample_size),
-                                transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)]
+
+        self.pixel_transforms = [transforms.Resize(sample_size),
+                            transforms.Normalize(mean=[0.5, 0.5, 0.5], std=[0.5, 0.5, 0.5], inplace=True)]
         self.rescale_fxy = rescale_fxy
         self.sample_wh_ratio = sample_size[1] / sample_size[0]
 
-        self.pixel_transforms = pixel_transforms
-        self.shuffle_frames = shuffle_frames
         self.use_flip = use_flip
 
     def get_relative_pose(self, cam_params):
@@ -282,11 +276,9 @@ class RealEstate10KPose(Dataset):
 
         assert end_frame_ind - start_frame_ind >= self.t
         frame_indices = np.linspace(start_frame_ind, end_frame_ind - 1, self.t, dtype=int)
-
-        if self.shuffle_frames:
-            perm = np.random.permutation(self.t)
-            frame_indices = frame_indices[perm]
-
+        if self.use_flip:
+            frame_indices = np.flip(frame_indices)
+        
         # stack images into a tensor
         pixel_values = []
         transformer = transforms.PILToTensor()
@@ -324,10 +316,8 @@ class RealEstate10KPose(Dataset):
         else:
             c2w_poses = np.array([cam_param.c2w_mat for cam_param in cam_params], dtype=np.float32)
         c2w = torch.as_tensor(c2w_poses)[None]                          # [1, n_frame, 4, 4]
-        if self.use_flip:
-            flip_flag = self.pixel_transforms[1].get_flip_flag(self.t)
-        else:
-            flip_flag = torch.zeros(self.t, dtype=torch.bool, device=c2w.device)
+
+        flip_flag = torch.zeros(self.t, dtype=torch.bool, device=c2w.device)
         plucker_embedding = ray_condition(intrinsics, c2w, self.sample_size[0], self.sample_size[1], device='cpu',
                                           flip_flag=flip_flag)[0].permute(0, 3, 1, 2).contiguous()
         # [V, H, W, 6] --> [V, 6, H, W]
@@ -347,13 +337,8 @@ class RealEstate10KPose(Dataset):
             except Exception as e:
                 idx = random.randint(0, self.length - 1)
 
-        if self.use_flip:
-            video = self.pixel_transforms[0](video)
-            video = self.pixel_transforms[1](video, flip_flag)
-            video = self.pixel_transforms[2](video)
-        else:
-            for transform in self.pixel_transforms:
-                video = transform(video)
+        for transform in self.pixel_transforms:
+            video = transform(video)
         # pixel_values: t, c, h, w
         # plucker_embedding: t, 6, h, w
         # intrinsics: 6,
