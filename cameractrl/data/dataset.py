@@ -200,7 +200,7 @@ class RealEstate10KPose(Dataset):
             sample_size=[256, 384],
             rescale_fxy=True,
             shuffle_frames=False,
-            # use_flip=False,
+            use_flip=False,
     ):
         self.root_path = root_path
         self.relative_pose = relative_pose
@@ -226,7 +226,7 @@ class RealEstate10KPose(Dataset):
         self.rescale_fxy = rescale_fxy
         self.sample_wh_ratio = sample_size[1] / sample_size[0]
 
-        # self.use_flip = use_flip
+        self.use_flip = use_flip
 
     def get_relative_pose(self, cam_params):
         abs_w2cs = [cam_param.w2c_mat for cam_param in cam_params]
@@ -276,8 +276,8 @@ class RealEstate10KPose(Dataset):
 
         assert end_frame_ind - start_frame_ind >= self.t
         frame_indices = np.linspace(start_frame_ind, end_frame_ind - 1, self.t, dtype=int)
-        # if self.use_flip:
-        #     frame_indices = np.flip(frame_indices)
+        if self.use_flip and random.randint(0, 1) == 1:
+            frame_indices = np.flip(frame_indices)
         
         # stack images into a tensor
         pixel_values = []
