@@ -186,7 +186,7 @@ class RealEstate10K(Dataset):
 class RealEstate10KPose(Dataset):
     def __init__(
             self,
-            root_path,
+            root_path='./RealEstate',
             frame_dir='./train',
             image_json='train.json',       # video_id -> [image_file_names]
             caption_json='train_captions.json',     # video_id -> [video_caption]
@@ -200,7 +200,7 @@ class RealEstate10KPose(Dataset):
             sample_size=[256, 384],
             rescale_fxy=True,
             shuffle_frames=False,
-            use_flip=False,
+            # use_flip=False,
     ):
         self.root_path = root_path
         self.relative_pose = relative_pose
@@ -226,7 +226,7 @@ class RealEstate10KPose(Dataset):
         self.rescale_fxy = rescale_fxy
         self.sample_wh_ratio = sample_size[1] / sample_size[0]
 
-        self.use_flip = use_flip
+        # self.use_flip = use_flip
 
     def get_relative_pose(self, cam_params):
         abs_w2cs = [cam_param.w2c_mat for cam_param in cam_params]
@@ -276,8 +276,8 @@ class RealEstate10KPose(Dataset):
 
         assert end_frame_ind - start_frame_ind >= self.t
         frame_indices = np.linspace(start_frame_ind, end_frame_ind - 1, self.t, dtype=int)
-        if self.use_flip:
-            frame_indices = np.flip(frame_indices)
+        # if self.use_flip:
+        #     frame_indices = np.flip(frame_indices)
         
         # stack images into a tensor
         pixel_values = []
@@ -321,9 +321,17 @@ class RealEstate10KPose(Dataset):
         plucker_embedding = ray_condition(intrinsics, c2w, self.sample_size[0], self.sample_size[1], device='cpu',
                                           flip_flag=flip_flag)[0].permute(0, 3, 1, 2).contiguous()
         # [V, H, W, 6] --> [V, 6, H, W]
+        extrinsics = torch.empty((self.t, 4, 4))
+        intrinsics = plist[0][1:7]
+        for i in range(self.t):
+            index = frame_indices[i]
+            pose = np.identity(4)
+            tmp = plist[index][7:].reshape((3, 4))
+            pose[:3, :4] = tmp
+            extrinsics[i] = torch.tensor(pose)
 
         return pixel_values, video_caption, plucker_embedding, \
-            plist[0][1: 7], torch.squeeze(c2w, dim=0), flip_flag
+            plist[0][1: 7], extrinsics, flip_flag
 
     def __len__(self):
         return self.length
@@ -335,6 +343,7 @@ class RealEstate10KPose(Dataset):
                 break
 
             except Exception as e:
+                print(f'err {e}')
                 idx = random.randint(0, self.length - 1)
 
         for transform in self.pixel_transforms:
