@@ -343,7 +343,6 @@ class RealEstate10KPose(Dataset):
                 break
 
             except Exception as e:
-                print(f'err {e}')
                 idx = random.randint(0, self.length - 1)
 
         for transform in self.pixel_transforms:
