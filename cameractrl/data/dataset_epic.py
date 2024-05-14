@@ -4,6 +4,7 @@ import csv
 import json
 import numpy as np
 from PIL import Image
+from collections import defaultdict
 
 import torch
 import torchvision.transforms as transforms
@@ -98,12 +99,16 @@ class EpicKitchen(Dataset):
         root = '/root/workspace/CameraCtrl/Epic',
         image_subfolder = 'epic',
         posefile_subfolder = 'pose',
-        meta_file = "EPIC_100_train.csv", 
+        meta_file = "EPIC_100_train.csv",
+        caption_subfolder = 'caption_per5',
         h = 256,
         w = 448,
+        sample_size = [256, 448],
         num_frames=8,
-        sample_stride=4,
+        sample_stride=5,
         is_image=False,         # set to true to return C, H, W instead of T, C, H, W
+        sample_by_narration=True,       # true: use narration as key
+        is_valid = False,
     ):
         """Define EpicKiten Dataset
         Args:
@@ -118,11 +123,15 @@ class EpicKitchen(Dataset):
         self.root = root
         self.image_subfolder = image_subfolder
         self.posefile_subfolder = posefile_subfolder
+        self.caption_subfolder = caption_subfolder
         self.h, self.w = h, w
         self.num_frames = num_frames
         self.sample_stride = sample_stride
         self.datalist = []
+        self.narration_to_videos = defaultdict(list)
         self.is_image = is_image
+        self.is_valid = is_valid
+        self.sample_by_narration = sample_by_narration
         
         # TODO: confirm the tranformer
         self.transformer = transforms.Compose([
@@ -158,6 +167,7 @@ class EpicKitchen(Dataset):
             self.frame_to_ex = json.load(f)
 
     def _check_from_data(self):
+        res = 0
         for line in self.meta_file:
             video_id = line[2]
             # skip if the video is missing
@@ -167,14 +177,27 @@ class EpicKitchen(Dataset):
             end_frame = int(line[7])
             narration = line[8]
             self.datalist.append((video_id, start_frame, end_frame, narration))
+            res += end_frame - start_frame + 1
+            self.narration_to_videos[narration].append((video_id, start_frame, end_frame,))
 
     def __len__(self):
-        return len(self.datalist)
+        if self.sample_by_narration:
+            return len(self.narration_to_videos.keys())
+        else:
+            return len(self.datalist)
 
     def __getitem__(self, index):
         while True:
             try:
-                video_id, start_frame, end_frame, narration = self.datalist[index]
+                if not self.sample_by_narration:
+                    video_id, start_frame, end_frame, narration = self.datalist[index]
+                else:
+                    narration = list(self.narration_to_videos.keys())[index]
+                    if self.is_valid:
+                        # for validation, use fixed first video
+                        video_id, start_frame, end_frame = self.narration_to_videos[narration][0]
+                    else:
+                        video_id, start_frame, end_frame = random.sample(self.narration_to_videos[narration], 1)[0]
                 if start_frame + (self.num_frames - 1) * self.sample_stride < end_frame:
                     indices = [x for x in range(start_frame, end_frame + 1, self.sample_stride)][:self.num_frames]
                 else:
@@ -184,8 +207,21 @@ class EpicKitchen(Dataset):
                 pixels = []
                 extrinsics = []
                 intrinsics = torch.zeros(6)
-                for i in indices:
-                    filename = f'frame_{str(i).zfill(10)}'
+                captions = []
+                for i, index in enumerate(indices):
+                    filename = f'frame_{str(index).zfill(10)}'
+
+                    # get captions
+                    if i == 0 or i == self.num_frames - 1:
+                        with open(os.path.join(self.root, self.caption_subfolder, video_id + '.json')) as f:
+                            data = json.load(f)
+                            # round frames to existing keys
+                            if i == 0:
+                                mods = [1, 0, 4, 3, 2]
+                            else:
+                                mods = [-4, 0, -1, -2, -3]
+                            index_ = index + mods[index % 5]
+                            captions.append(data[f'frame_{str(index_).zfill(10)}.jpg'])
 
                     # get pixels
                     with Image.open(os.path.join(self.root, self.image_subfolder, video_id, filename + '.jpg')) as img:
@@ -203,6 +239,8 @@ class EpicKitchen(Dataset):
             except Exception as err:
                 # skip if the corresponding camera pose is missing, get a random idx instead
                 index = random.randint(0, self.__len__() - 1)
+                # print(f'err: {err}')
+
         pixels = torch.stack(pixels, dim = 0)
         extrinsics = torch.stack(extrinsics, dim = 0)
 
@@ -222,7 +260,7 @@ class EpicKitchen(Dataset):
 
         return {
             'pixel_values': pixels,     # T, C, H, W
-            'caption': narration,          # str
+            'text': captions[0] + ',' + captions[1] + ',' + narration,     # str
             'intrinsics': intrinsics,       # 6,
             'extrinsics': extrinsics,       # T, 4, 4
             'plucker_embedding': plucker_embedding,     # T, 6, H, W

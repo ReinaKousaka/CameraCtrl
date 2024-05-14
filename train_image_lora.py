@@ -302,11 +302,11 @@ def main(name: str,
             batch = next(data_iter)
             data_end_time = time.time()
             if cfg_random_null_text:
-                batch['caption'] = [name if random.random() > cfg_random_null_text_ratio else "" for name in batch['caption']]
+                batch['text'] = [name if random.random() > cfg_random_null_text_ratio else "" for name in batch['text']]
 
             # Data batch sanity check
             if epoch == first_epoch and step == 0 and do_sanity_check:
-                pixel_values, texts = batch['pixel_values'].cpu(), batch['caption']
+                pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
                 for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
                     pixel_value = pixel_value / 2. + 0.5
                     torchvision.utils.save_image(pixel_value, f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.png")
@@ -336,7 +336,7 @@ def main(name: str,
             # Get the text embedding for conditioning
             with torch.no_grad():
                 prompt_ids = tokenizer(
-                    batch['caption'], max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
+                    batch['text'], max_length=tokenizer.model_max_length, padding="max_length", truncation=True, return_tensors="pt"
                 ).input_ids.to(latents.device)
                 encoder_hidden_states = text_encoder(prompt_ids)[0]
 
