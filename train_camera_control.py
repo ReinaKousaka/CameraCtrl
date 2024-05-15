@@ -27,6 +27,7 @@ from transformers import CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjec
 from einops import rearrange
 
 from cameractrl.data.dataset import RealEstate10KPose
+from cameractrl.data.dataset_epic import EpicKitchen
 from cameractrl.utils.util import setup_logger, format_time, save_videos_grid
 from cameractrl.pipelines.pipeline_animation import CameraCtrlPipeline
 from cameractrl.models.unet import UNet3DConditionModelPoseCond
@@ -300,6 +301,7 @@ def main(name: str,
     # Get the training dataset
     logger.info(f'Building training datasets')
     train_dataset = RealEstate10KPose(**train_data)
+    # train_dataset = EpicKitchen(**train_data)
     distributed_sampler = DistributedSampler(
         train_dataset,
         num_replicas=num_processes,
@@ -322,6 +324,7 @@ def main(name: str,
     # Get the validation dataset
     logger.info(f'Building validation datasets')
     validation_dataset = RealEstate10KPose(**validation_data)
+    # validation_dataset = EpicKitchen(**train_data)
     VALIDATION_BATCH_SIZE = 1
     validation_dataloader = torch.utils.data.DataLoader(
         validation_dataset,
