@@ -141,6 +141,23 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
             ) if fuse_first_frame else None
         )
 
+        # controlnet default params
+        def zero_module(module):
+            for p in module.parameters():
+                nn.init.zeros_(p)
+            return module
+        mid_block_channel = block_out_channels[-1]
+        controlnet_block = InflatedConv3d(mid_block_channel, mid_block_channel, kernel_size=1)
+        controlnet_block = zero_module(controlnet_block)
+        self.controlnet_mid_block = controlnet_block
+
+        self.controlnet_down_blocks = nn.ModuleList([])
+        output_channel = block_out_channels[0]
+        controlnet_block = InflatedConv3d(output_channel, output_channel, kernel_size=1)
+        controlnet_block = zero_module(controlnet_block)
+        self.controlnet_down_blocks.append(controlnet_block)
+
+
         if isinstance(only_cross_attention, bool):
             only_cross_attention = [only_cross_attention] * len(down_block_types)
 
@@ -196,6 +213,18 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
 
             self.down_blocks.append(down_block)
             self.down_fusers.append(down_fuser)
+
+            # controlnet
+            for _ in range(layers_per_block):
+                controlnet_block = InflatedConv3d(output_channel, output_channel, kernel_size=1)
+                controlnet_block = zero_module(controlnet_block)
+                self.controlnet_down_blocks
+            
+            if not is_final_block:
+                controlnet_block = InflatedConv3d(output_channel, output_channel, kernel_size=1)
+                controlnet_block = zero_module(controlnet_block)
+                self.controlnet_down_blocks.append(controlnet_block)
+
 
         # mid
         if mid_block_type == "UNetMidBlock3DCrossAttn":
@@ -548,6 +577,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
             # support controlnet
             down_block_additional_residuals: Optional[Tuple[torch.Tensor]] = None,
             mid_block_additional_residual: Optional[torch.Tensor] = None,
+            enable_default_controlnet: bool = True,      # load additional residuals from helper
 
             # other features
             motion_module_alphas: Union[tuple, float] = 1.0,
@@ -682,6 +712,8 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
             down_block_res_samples += res_samples
 
         # support controlnet
+        if enable_default_controlnet:
+            down_block_additional_residuals = self.controlnet_down_blocks
         if down_block_additional_residuals is not None:
             new_down_block_res_samples = ()
 
@@ -716,6 +748,8 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
             sample = torch.cat([sample[:, :, :1], fused_sample], dim=2)
 
         # support controlnet
+        if enable_default_controlnet:
+            mid_block_additional_residual = self.controlnet_mid_block
         if mid_block_additional_residual is not None:
             if len(mid_block_additional_residual.shape) == 4:
                 mid_block_additional_residual = mid_block_additional_residual.unsqueeze(2)
@@ -1173,6 +1207,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
             down_block_res_samples += res_samples
 
         # support controlnet
+        # down_block_additional_residuals: refer to self.controlnet_down_blocks in sparse_controlnet.py
         if down_block_additional_residuals is not None:
             new_down_block_res_samples = ()
 
