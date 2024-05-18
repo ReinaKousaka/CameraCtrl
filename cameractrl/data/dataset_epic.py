@@ -210,7 +210,7 @@ def _get_plucker_embedding2(intrinsic, extrinsic_lst, h, w, ori_h, ori_w, t):
 
 class EpicKitchen(Dataset):
     def __init__(self,
-        root = '/root/workspace/CameraCtrl/Epic',
+        root = '/root/CameraCtrl/Epic',
         image_subfolder = 'epic',
         posefile_subfolder = 'pose',
         meta_file = "EPIC_100_train.csv",
@@ -289,7 +289,7 @@ class EpicKitchen(Dataset):
             self.videoid_to_ex = json.load(f)
 
     def _check_from_data(self):
-        res = 0
+        videoid_to_timestamps = defaultdict(list)
         for line in self.meta_file:
             video_id = line[2]
             # skip if the video is missing
@@ -298,16 +298,19 @@ class EpicKitchen(Dataset):
             start_frame = int(line[6])
             end_frame = int(line[7])
             narration = line[8]
+
+            videoid_to_timestamps[video_id].append((start_frame, end_frame))
             self.datalist.append((video_id, start_frame, end_frame, narration))
-            res += end_frame - start_frame + 1
             self.narration_to_videos[narration].append((video_id, start_frame, end_frame,))
 
-            # the gap are frames without narrations
-            if last_end_frame is not None:
-                assert start_frame - 1 >= last_end_frame + 1
-                # use moving as default for missing narrations
-                self.datalist_no_narration.append((video_id, last_end_frame + 1, start_frame - 1, 'moving'))
-            last_end_frame = end_frame
+        # fill the gap for missing narration clips
+        for video_id, timestampes in videoid_to_timestamps.items():
+            timestampes = sorted(timestampes)
+            for i in range(len(timestampes) - 1):
+                start_frame = timestampes[i][1] + 1
+                end_frame = timestampes[i + 1][0] - 1
+                if start_frame > end_frame: continue
+                self.datalist_no_narration.append((video_id, start_frame, end_frame, 'moving'))
 
     def __len__(self):
         if self.sample_by_narration:
