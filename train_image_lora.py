@@ -208,6 +208,8 @@ def main(name: str,
     text_encoder.to(local_rank)
 
     # Get the training dataset
+    train_data['sample_by_narration'] = False
+    train_data['num_frames'] = 1
     train_dataset = EpicKitchen(**train_data)
     distributed_sampler = DistributedSampler(
         train_dataset,
