@@ -3,20 +3,20 @@ pretrained_model_path: "./stable-diffusion-v1-5"
 unet_subfolder: "unet_webvidlora_v3"
 
 train_data:
-  num_frames: 8
+  num_frames: 1
   sample_stride: 5
   is_image: true
 
 validation_data:
   prompts:
-    - "take plate"
-    - "put down plate"
-    - "take paper"
-    - "squeeze cloth"
-    - "close bin"
-    - "close fridge"
-    - "cut pizza"
-    - "move chair"
+    - "a person holding plate with a fork on it,a person holding plate with a fork on it,take plate"
+    - "a person cleaning a kitchen sink with a sponge,a person cleaning a kitchen sink with a sponge,throw cloth"
+    - "a person holding a frying pan in front of a microwave,a person holding a frying panin front of a microwave,move lid"
+    - "a person puting down plate into the sink,a person puting down plate into the sink,empty mug into sink"
+    - "a person washing their hands in a sink,a person washing their hands in a sink,damp sponge"
+    - "a person pouring something into a bowl in a kitchen,a person pouring something into a bowl in a kitchen,put tea into cupboard"
+    - "a person stirring something in a pot on a stove,a person stirring something in a pot on a stove,pour lemon curd mixture"
+    - "a person cutting a piece of food on a kitchen counter,a person cutting a piece of food on a kitchen counter,cut food"
   num_inference_steps: 50
   guidance_scale: 8.
 
@@ -39,7 +39,7 @@ learning_rate:    1.e-4
 lora_rank: 2
 
 num_workers: 8
-train_batch_size: 16
+train_batch_size: 4
 gradient_accumulation_steps: 16
 
 checkpointing_epochs: -1

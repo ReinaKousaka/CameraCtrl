@@ -116,11 +116,9 @@ def main(name: str,
     check_min_version("0.10.0.dev0")
 
     # Initialize distributed training
-    # local_rank      = init_dist(launcher=launcher, port=port)
-    # global_rank     = dist.get_rank()
-    # num_processes   = dist.get_world_size()
-    local_rank = global_rank = 0
-    num_processes = 1
+    local_rank      = init_dist(launcher=launcher, port=port)
+    global_rank     = dist.get_rank()
+    num_processes   = dist.get_world_size()
     is_main_process = global_rank == 0
 
     seed = global_seed + global_rank
@@ -145,7 +143,7 @@ def main(name: str,
     # Load scheduler, tokenizer and models.
     noise_scheduler = DDIMScheduler(**OmegaConf.to_container(noise_scheduler_kwargs))
 
-    vae = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae")
+    vae = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae", local_files_only=True)
     tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_path, subfolder="tokenizer")
     text_encoder = CLIPTextModel.from_pretrained(pretrained_model_path, subfolder="text_encoder")
     unet = UNet2DConditionModel.from_pretrained(pretrained_model_path, subfolder=unet_subfolder)
@@ -274,7 +272,7 @@ def main(name: str,
 
     # DDP warpper
     unet.to(local_rank)
-    # unet = DDP(unet, device_ids=[local_rank], output_device=local_rank)
+    unet = DDP(unet, device_ids=[local_rank], output_device=local_rank)
 
     if resume_from is not None:
         logger.info(f"Resuming the training from the checkpoint: {resume_from}")
@@ -306,12 +304,12 @@ def main(name: str,
             if cfg_random_null_text:
                 batch['text'] = [name if random.random() > cfg_random_null_text_ratio else "" for name in batch['text']]
 
-            # Data batch sanity check
-            if epoch == first_epoch and step == 0 and do_sanity_check:
-                pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
-                for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
-                    pixel_value = pixel_value / 2. + 0.5
-                    torchvision.utils.save_image(pixel_value, f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.png")
+            # # Data batch sanity check
+            # if epoch == first_epoch and step == 0 and do_sanity_check:
+            #     pixel_values, texts = batch['pixel_values'].cpu(), batch['text']
+            #     for idx, (pixel_value, text) in enumerate(zip(pixel_values, texts)):
+            #         pixel_value = pixel_value / 2. + 0.5
+            #         torchvision.utils.save_image(pixel_value, f"{output_dir}/sanity_check/{'-'.join(text.replace('/', '').split()[:10]) if not text == '' else f'{global_rank}-{idx}'}.png")
 
             ### >>>> Training >>>> ###
 
