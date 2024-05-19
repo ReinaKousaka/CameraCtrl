@@ -432,42 +432,45 @@ def main(name: str,
             # Mixed-precision training
             plucker_embedding = batch["plucker_embedding"].to(device=local_rank)  # [b, f, 6, h, w]
             plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f h, w]
-            # with torch.cuda.amp.autocast(enabled=mixed_precision_training):
-            #     model_pred = pose_adaptor(noisy_latents,
-            #                               timesteps,
-            #                               encoder_hidden_states=encoder_hidden_states,
-            #                               pose_embedding=plucker_embedding)  # [b c f h w]
+            with torch.cuda.amp.autocast(enabled=mixed_precision_training):
+                model_pred = pose_adaptor(noisy_latents,
+                                          timesteps,
+                                          encoder_hidden_states=encoder_hidden_states,
+                                          pose_embedding=plucker_embedding)  # [b c f h w]
 
-            #     # Get the target for loss depending on the prediction type
-            #     if noise_scheduler.config.prediction_type == "epsilon":
-            #         target = noise
-            #     elif noise_scheduler.config.prediction_type == "v_prediction":
-            #         raise NotImplementedError
-            #     else:
-            #         raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+                # Get the target for loss depending on the prediction type
+                if noise_scheduler.config.prediction_type == "epsilon":
+                    target = noise
+                elif noise_scheduler.config.prediction_type == "v_prediction":
+                    raise NotImplementedError
+                else:
+                    raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-            #     loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+                loss = loss / gradient_accumulation_steps
 
             # Backpropagate
-            # if mixed_precision_training:
-            #     scaler.scale(loss).backward()
-            #     """ >>> gradient clipping >>> """
-            #     scaler.unscale_(optimizer)
-            #     torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
-            #                                    max_grad_norm)
-            #     """ <<< gradient clipping <<< """
-            #     scaler.step(optimizer)
-            #     scaler.update()
-            # else:
-            #     loss.backward()
-            #     """ >>> gradient clipping >>> """
-            #     torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
-            #                                    max_grad_norm)
-            #     """ <<< gradient clipping <<< """
-            #     optimizer.step()
+            if mixed_precision_training:
+                scaler.scale(loss).backward()
+                """ >>> gradient clipping >>> """
+                scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
+                                               max_grad_norm)
+                """ <<< gradient clipping <<< """
+                scaler.step(optimizer)
+                scaler.update()
+            else:
+                loss.backward()
+                """ >>> gradient clipping >>> """
+                if (step + 1) % gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
+                    torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
+                                                max_grad_norm)
+                    """ <<< gradient clipping <<< """
+                    optimizer.step()
 
-            # lr_scheduler.step()
-            # optimizer.zero_grad(set_to_none=True)
+            if (step + 1) % gradient_accumulation_steps == 0 or (step + 1) == len(train_dataloader):
+                lr_scheduler.step()
+                optimizer.zero_grad(set_to_none=True)
             global_step += 1
             iter_end_time = time.time()
 
@@ -539,7 +542,7 @@ def main(name: str,
                     save_videos_grid(sample_gt[None, ...], save_path)
                     logger.info(f"Saved samples to {save_path}")
 
-                    if idx == 10: exit(0)
+                    if idx == 5: break
             if (global_step % logger_interval) == 0 or global_step == 0:
                 gpu_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)
                 msg = f"Iter: {global_step}/{max_train_steps}, Loss: {loss.detach().item(): .4f}, " \
