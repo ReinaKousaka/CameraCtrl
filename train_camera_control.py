@@ -170,7 +170,6 @@ def main(name: str,
                                 lora_kwargs={"lora_rank": lora_rank, "lora_scale": lora_scale},
                                 motion_lora_kwargs={"lora_rank": motion_lora_rank, "lora_scale": motion_lora_scale},
                                 **attention_processor_kwargs)
-    print(f'main: {unet.in_channels}')
     unet.config.num_attention_heads = 8
     unet.config.projection_class_embeddings_input_dim = None
     # load v3_sd15_sparsectrl_rgb.ckpt
@@ -184,7 +183,7 @@ def main(name: str,
     controlnet_state_dict.pop("animatediff_config", "")
     controlnet.load_state_dict(controlnet_state_dict)
     controlnet.cuda()
-    print(f'main: {unet.in_channels}')
+
     if lora_ckpt is not None:
         logger.info(f"Loading the image lora checkpoint from {lora_ckpt}")
         lora_checkpoints = torch.load(lora_ckpt, map_location=unet.device)

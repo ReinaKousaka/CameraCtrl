@@ -685,7 +685,6 @@ class CameraCtrlPipeline(AnimationPipeline):
                 mask_full = torch.zeros_like(latents).to(latents.device)
                 noise_preds = []
                 for multidiff_step in range(multidiff_total_steps):
-                    print(f'running for')
                     start_idx = multidiff_step * (single_model_length - multidiff_overlaps)
                     latent_partial = latents[:, :, start_idx: start_idx + single_model_length].contiguous()
                     mask_full[:, :, start_idx: start_idx + single_model_length] += 1
@@ -699,7 +698,6 @@ class CameraCtrlPipeline(AnimationPipeline):
                     # expand the latents if we are doing classifier free guidance
                     latent_model_input = torch.cat([latent_partial] * 2) if do_classifier_free_guidance else latent_partial   # [2b c f h w]
                     latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
-                    print(f'pipeline: ori latent_model_input {latent_model_input.shape}')
 
                     down_block_additional_residuals = mid_block_additional_residual = None
                     if (getattr(self, "controlnet", None) != None) and (controlnet_images != None):

@@ -1190,7 +1190,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                                                                                              self.down_fusers[1:],
                                                                                              motion_module_alphas[:-1]):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
-                print(f'unet: {sample.shape}')      # unet: torch.Size([2, 4, 10, 32, 48])
+                print(f'unet.py sample: {sample.shape}')      # unet: torch.Size([2, 4, 10, 32, 48])
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
                     temb=emb,
