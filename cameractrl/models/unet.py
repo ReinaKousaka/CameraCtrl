@@ -39,6 +39,14 @@ from cameractrl.models.resnet import (
     InflatedConv3d,
     FusionBlock2D
 )
+# from cameractrl.models.sparse_controlnet import SparseControlNetConditioningEmbedding
+
+
+def zero_module(module):
+    for p in module.parameters():
+        nn.init.zeros_(p)
+    return module
+
 
 @dataclass
 class UNet3DConditionOutput(BaseOutput):
@@ -87,6 +95,10 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
             num_class_embeds: Optional[int] = None,
             upcast_attention: bool = False,
             resnet_time_scale_shift: str = "default",
+
+            # # for sparse encoder
+            # use_simplified_condition_embedding: bool = False,
+            # conditioning_embedding_out_channels: Optional[Tuple[int]] = (16, 32, 96, 256),
 
             # Additional
             use_motion_module=False,
@@ -141,11 +153,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
             ) if fuse_first_frame else None
         )
 
-        # controlnet default params
-        def zero_module(module):
-            for p in module.parameters():
-                nn.init.zeros_(p)
-            return module
+        # for sparse encoder
         mid_block_channel = block_out_channels[-1]
         controlnet_block = InflatedConv3d(mid_block_channel, mid_block_channel, kernel_size=1)
         controlnet_block = zero_module(controlnet_block)
@@ -156,6 +164,18 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
         controlnet_block = InflatedConv3d(output_channel, output_channel, kernel_size=1)
         controlnet_block = zero_module(controlnet_block)
         self.controlnet_down_blocks.append(controlnet_block)
+
+        # conditioning_channels = 4
+        # if use_simplified_condition_embedding:
+        #     self.controlnet_cond_embedding = zero_module(
+        #         InflatedConv3d(conditioning_channels, block_out_channels[0], kernel_size=conv_in_kernel, padding=conv_in_padding)
+        #     )
+        # else:
+        #     self.controlnet_cond_embedding = SparseControlNetConditioningEmbedding(
+        #         conditioning_embedding_channels=block_out_channels[0],
+        #         block_out_channels=conditioning_embedding_out_channels,
+        #         conditioning_channels=conditioning_channels,
+        #     )
 
 
         if isinstance(only_cross_attention, bool):
@@ -1143,8 +1163,6 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
         video_length = sample.shape[2]
         encoder_hidden_states = repeat(encoder_hidden_states, "b n c -> (b f) n c", f=video_length)
 
-        # pre-process
-        sample = self.conv_in(sample)           # b c f h w
         activations["conv_in_out"] = sample
 
         # to be fused
@@ -1172,6 +1190,7 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
                                                                                              self.down_fusers[1:],
                                                                                              motion_module_alphas[:-1]):
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
+                print(f'unet: {sample.shape}')      # unet: torch.Size([2, 4, 10, 32, 48])
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
                     temb=emb,
@@ -1207,7 +1226,6 @@ class UNet3DConditionModelPoseCond(UNet3DConditionModel):
             down_block_res_samples += res_samples
 
         # support controlnet
-        # down_block_additional_residuals: refer to self.controlnet_down_blocks in sparse_controlnet.py
         if down_block_additional_residuals is not None:
             new_down_block_res_samples = ()
 

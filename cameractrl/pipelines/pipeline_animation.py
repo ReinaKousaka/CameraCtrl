@@ -27,6 +27,7 @@ from diffusers.utils import deprecate, logging, BaseOutput
 
 from cameractrl.models.pose_adaptor import CameraPoseEncoder
 from cameractrl.models.unet import UNet3DConditionModel
+from cameractrl.models.sparse_controlnet import SparseControlNetModel
 
 
 logger = logging.get_logger(__name__)  # pylint: disable=invalid-name
@@ -371,6 +372,7 @@ class AnimationPipeline(DiffusionPipeline, LoraLoaderMixin):
         single_model_length = video_length
         video_length = multidiff_total_steps * (video_length - multidiff_overlaps) + multidiff_overlaps
         num_channels_latents = self.unet.in_channels
+        print(f'pipeline: self.unet.in_channels {self.unet.in_channels}')
         latents = self.prepare_latents(
             batch_size * num_videos_per_prompt,
             num_channels_latents,
@@ -442,24 +444,28 @@ class AnimationPipeline(DiffusionPipeline, LoraLoaderMixin):
 class CameraCtrlPipeline(AnimationPipeline):
     _optional_components = []
 
-    def __init__(self,
-                 vae: AutoencoderKL,
-                 text_encoder: CLIPTextModel,
-                 tokenizer: CLIPTokenizer,
-                 unet: UNet3DConditionModel,
-                 scheduler: Union[
-                     DDIMScheduler,
-                     PNDMScheduler,
-                     LMSDiscreteScheduler,
-                     EulerDiscreteScheduler,
-                     EulerAncestralDiscreteScheduler,
-                     DPMSolverMultistepScheduler],
-                 pose_encoder: CameraPoseEncoder):
+    def __init__(
+        self,
+        vae: AutoencoderKL,
+        text_encoder: CLIPTextModel,
+        tokenizer: CLIPTokenizer,
+        unet: UNet3DConditionModel,
+        scheduler: Union[
+            DDIMScheduler,
+            PNDMScheduler,
+            LMSDiscreteScheduler,
+            EulerDiscreteScheduler,
+            EulerAncestralDiscreteScheduler,
+            DPMSolverMultistepScheduler],
+        pose_encoder: CameraPoseEncoder,
+        controlnet: SparseControlNetModel,
+    ):
 
         super().__init__(vae, text_encoder, tokenizer, unet, scheduler)
 
         self.register_modules(
-            pose_encoder=pose_encoder
+            pose_encoder=pose_encoder,
+            controlnet=controlnet,
         )
 
     def decode_latents(self, latents):
@@ -587,6 +593,12 @@ class CameraCtrlPipeline(AnimationPipeline):
         callback_steps: Optional[int] = 1,
         multidiff_total_steps: int = 1,
         multidiff_overlaps: int = 12,
+
+        # support controlnet
+        controlnet_images: torch.FloatTensor = None,
+        controlnet_image_index: list = [0],
+        controlnet_conditioning_scale: Union[float, List[float]] = 1.0,
+
         **kwargs,
     ):
         # Default height and width to unet
@@ -626,6 +638,7 @@ class CameraCtrlPipeline(AnimationPipeline):
         single_model_length = video_length
         video_length = multidiff_total_steps * (video_length - multidiff_overlaps) + multidiff_overlaps
         num_channels_latents = self.unet.in_channels
+        print(f'pipeline unet in c: {self.unet.in_channels}')
         latents = self.prepare_latents(
             batch_size * num_videos_per_prompt,
             num_channels_latents,
@@ -637,6 +650,7 @@ class CameraCtrlPipeline(AnimationPipeline):
             generator,
             latents,
         )                   # b c f h w
+        print(f'pipeline latents after prepare {latents.shape}')
         latents_dtype = latents.dtype
 
         # Prepare extra step kwargs.
@@ -671,6 +685,7 @@ class CameraCtrlPipeline(AnimationPipeline):
                 mask_full = torch.zeros_like(latents).to(latents.device)
                 noise_preds = []
                 for multidiff_step in range(multidiff_total_steps):
+                    print(f'running for')
                     start_idx = multidiff_step * (single_model_length - multidiff_overlaps)
                     latent_partial = latents[:, :, start_idx: start_idx + single_model_length].contiguous()
                     mask_full[:, :, start_idx: start_idx + single_model_length] += 1
@@ -684,10 +699,48 @@ class CameraCtrlPipeline(AnimationPipeline):
                     # expand the latents if we are doing classifier free guidance
                     latent_model_input = torch.cat([latent_partial] * 2) if do_classifier_free_guidance else latent_partial   # [2b c f h w]
                     latent_model_input = self.scheduler.scale_model_input(latent_model_input, t)
+                    print(f'pipeline: ori latent_model_input {latent_model_input.shape}')
 
+                    down_block_additional_residuals = mid_block_additional_residual = None
+                    if (getattr(self, "controlnet", None) != None) and (controlnet_images != None):
+                        assert controlnet_images.dim() == 5
+
+                        controlnet_noisy_latents = latent_model_input
+                        controlnet_prompt_embeds = text_embeddings
+
+                        controlnet_images = controlnet_images.to(latents.device)
+
+                        controlnet_cond_shape = list(controlnet_images.shape)
+                        controlnet_cond_shape[2] = video_length
+                        controlnet_cond = torch.zeros(controlnet_cond_shape).to(latents.device)
+
+                        controlnet_conditioning_mask_shape    = list(controlnet_cond.shape)
+                        controlnet_conditioning_mask_shape[1] = 1
+                        controlnet_conditioning_mask          = torch.zeros(controlnet_conditioning_mask_shape).to(latents.device)
+
+                        assert controlnet_images.shape[2] >= len(controlnet_image_index)
+                        controlnet_cond[:,:,controlnet_image_index] = controlnet_images[:,:,:len(controlnet_image_index)]
+                        controlnet_conditioning_mask[:,:,controlnet_image_index] = 1
+
+                        down_block_additional_residuals, mid_block_additional_residual = self.controlnet(
+                            controlnet_noisy_latents, t,
+                            encoder_hidden_states=controlnet_prompt_embeds,
+                            controlnet_cond=controlnet_cond,
+                            conditioning_mask=controlnet_conditioning_mask,
+                            conditioning_scale=controlnet_conditioning_scale,
+                            guess_mode=False, return_dict=False,
+                        )
+                    print('pipeline.py: finish passing controlnet')
                     # predict the noise residual
-                    noise_pred = self.unet(latent_model_input, t, encoder_hidden_states=text_embeddings,
-                                           pose_embedding_features=pose_embedding_features_input).sample.to(dtype=latents_dtype)
+                    print(f'pipeline.py: pass {latent_model_input.shape} into unet')
+                    noise_pred = self.unet(
+                        latent_model_input,
+                        t,
+                        encoder_hidden_states=text_embeddings,
+                        pose_embedding_features=pose_embedding_features_input,
+                        down_block_additional_residuals = down_block_additional_residuals,
+                        mid_block_additional_residual = mid_block_additional_residual,
+                    ).sample.to(dtype=latents_dtype)
                     # perform guidance
                     if do_classifier_free_guidance:
                         noise_pred_uncond, noise_pred_text = noise_pred.chunk(2)

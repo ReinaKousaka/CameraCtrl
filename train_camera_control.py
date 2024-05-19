@@ -32,6 +32,7 @@ from cameractrl.pipelines.pipeline_animation import CameraCtrlPipeline
 from cameractrl.models.unet import UNet3DConditionModelPoseCond
 from cameractrl.models.pose_adaptor import CameraPoseEncoder, PoseAdaptor
 from cameractrl.models.attention_processor import AttnProcessor as CustomizedAttnProcessor
+from cameractrl.models.sparse_controlnet import SparseControlNetModel
 
 
 def init_dist(launcher="slurm", backend='nccl', port=29500, **kwargs):
@@ -78,6 +79,7 @@ def main(name: str,
          cfg_random_null_text_ratio: float = 0.1,
 
          unet_additional_kwargs: Dict = {},
+         controlnet_additional_kwargs: Dict = {},
          unet_subfolder: str = "unet",
 
          lora_rank: int = 4,
@@ -152,8 +154,13 @@ def main(name: str,
     vae = AutoencoderKL.from_pretrained(pretrained_model_path, subfolder="vae")
     tokenizer = CLIPTokenizer.from_pretrained(pretrained_model_path, subfolder="tokenizer")
     text_encoder = CLIPTextModel.from_pretrained(pretrained_model_path, subfolder="text_encoder")
-    unet = UNet3DConditionModelPoseCond.from_pretrained_2d(pretrained_model_path, subfolder=unet_subfolder,
-                                                           unet_additional_kwargs=unet_additional_kwargs)
+    unet = UNet3DConditionModelPoseCond.from_pretrained_2d(
+        pretrained_model_path,
+        subfolder=unet_subfolder,
+        unet_additional_kwargs=unet_additional_kwargs
+    )
+
+
     pose_encoder = CameraPoseEncoder(**pose_encoder_kwargs)
 
     # init attention processor
@@ -163,7 +170,21 @@ def main(name: str,
                                 lora_kwargs={"lora_rank": lora_rank, "lora_scale": lora_scale},
                                 motion_lora_kwargs={"lora_rank": motion_lora_rank, "lora_scale": motion_lora_scale},
                                 **attention_processor_kwargs)
-
+    print(f'main: {unet.in_channels}')
+    unet.config.num_attention_heads = 8
+    unet.config.projection_class_embeddings_input_dim = None
+    # load v3_sd15_sparsectrl_rgb.ckpt
+    controlnet = SparseControlNetModel.from_unet(
+        unet,
+        controlnet_additional_kwargs=controlnet_additional_kwargs,
+    )
+    print(f"loading controlnet checkpoint from ./v3_sd15_sparsectrl_rgb.ckpt ...")
+    controlnet_state_dict = torch.load("v3_sd15_sparsectrl_rgb.ckpt", map_location="cpu")
+    controlnet_state_dict = controlnet_state_dict["controlnet"] if "controlnet" in controlnet_state_dict else controlnet_state_dict
+    controlnet_state_dict.pop("animatediff_config", "")
+    controlnet.load_state_dict(controlnet_state_dict)
+    controlnet.cuda()
+    print(f'main: {unet.in_channels}')
     if lora_ckpt is not None:
         logger.info(f"Loading the image lora checkpoint from {lora_ckpt}")
         lora_checkpoints = torch.load(lora_ckpt, map_location=unet.device)
@@ -185,6 +206,16 @@ def main(name: str,
         logger.info("Loading done")
     else:
         logger.info(f"We do not load pretrained motion module checkpoint")
+
+    # the following snippet is to load pre-trained CameraCtrl.ckpt
+    print(f"Loading pose adaptor")
+    pose_adaptor_checkpoint = torch.load('./CameraCtrl.ckpt', map_location='cpu')
+    pose_encoder_state_dict = pose_adaptor_checkpoint['pose_encoder_state_dict']
+    pose_encoder_m, pose_encoder_u = pose_encoder.load_state_dict(pose_encoder_state_dict)
+    assert len(pose_encoder_u) == 0 and len(pose_encoder_m) == 0
+    attention_processor_state_dict = pose_adaptor_checkpoint['attention_processor_state_dict']
+    _, attn_proc_u = unet.load_state_dict(attention_processor_state_dict, strict=False)
+    assert len(attn_proc_u) == 0
 
     # Freeze vae, and text_encoder
     vae.requires_grad_(False)
@@ -292,7 +323,9 @@ def main(name: str,
         tokenizer=tokenizer,
         unet=unet,
         scheduler=noise_scheduler,
-        pose_encoder=pose_encoder)
+        pose_encoder=pose_encoder,
+        controlnet=controlnet,
+    )
     validation_pipeline.enable_vae_slicing()
 
     # DDP wrapper
@@ -400,42 +433,42 @@ def main(name: str,
             # Mixed-precision training
             plucker_embedding = batch["plucker_embedding"].to(device=local_rank)  # [b, f, 6, h, w]
             plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")  # [b, 6, f h, w]
-            with torch.cuda.amp.autocast(enabled=mixed_precision_training):
-                model_pred = pose_adaptor(noisy_latents,
-                                          timesteps,
-                                          encoder_hidden_states=encoder_hidden_states,
-                                          pose_embedding=plucker_embedding)  # [b c f h w]
+            # with torch.cuda.amp.autocast(enabled=mixed_precision_training):
+            #     model_pred = pose_adaptor(noisy_latents,
+            #                               timesteps,
+            #                               encoder_hidden_states=encoder_hidden_states,
+            #                               pose_embedding=plucker_embedding)  # [b c f h w]
 
-                # Get the target for loss depending on the prediction type
-                if noise_scheduler.config.prediction_type == "epsilon":
-                    target = noise
-                elif noise_scheduler.config.prediction_type == "v_prediction":
-                    raise NotImplementedError
-                else:
-                    raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
+            #     # Get the target for loss depending on the prediction type
+            #     if noise_scheduler.config.prediction_type == "epsilon":
+            #         target = noise
+            #     elif noise_scheduler.config.prediction_type == "v_prediction":
+            #         raise NotImplementedError
+            #     else:
+            #         raise ValueError(f"Unknown prediction type {noise_scheduler.config.prediction_type}")
 
-                loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
+            #     loss = F.mse_loss(model_pred.float(), target.float(), reduction="mean")
 
             # Backpropagate
-            if mixed_precision_training:
-                scaler.scale(loss).backward()
-                """ >>> gradient clipping >>> """
-                scaler.unscale_(optimizer)
-                torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
-                                               max_grad_norm)
-                """ <<< gradient clipping <<< """
-                scaler.step(optimizer)
-                scaler.update()
-            else:
-                loss.backward()
-                """ >>> gradient clipping >>> """
-                torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
-                                               max_grad_norm)
-                """ <<< gradient clipping <<< """
-                optimizer.step()
+            # if mixed_precision_training:
+            #     scaler.scale(loss).backward()
+            #     """ >>> gradient clipping >>> """
+            #     scaler.unscale_(optimizer)
+            #     torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
+            #                                    max_grad_norm)
+            #     """ <<< gradient clipping <<< """
+            #     scaler.step(optimizer)
+            #     scaler.update()
+            # else:
+            #     loss.backward()
+            #     """ >>> gradient clipping >>> """
+            #     torch.nn.utils.clip_grad_norm_(filter(lambda p: p.requires_grad, pose_adaptor.parameters()),
+            #                                    max_grad_norm)
+            #     """ <<< gradient clipping <<< """
+            #     optimizer.step()
 
-            lr_scheduler.step()
-            optimizer.zero_grad(set_to_none=True)
+            # lr_scheduler.step()
+            # optimizer.zero_grad(set_to_none=True)
             global_step += 1
             iter_end_time = time.time()
 
@@ -476,6 +509,17 @@ def main(name: str,
                 for idx, validation_batch in enumerate(validation_data_iter):
                     plucker_embedding = validation_batch['plucker_embedding'].to(device=unet.device)
                     plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
+
+   
+                    controlnet_images = validation_batch['pixel_values']
+                    controlnet_images = rearrange(controlnet_images, "b f c h w -> b c f h w")
+                    controlnet_images = controlnet_images.to(local_rank)
+                    if controlnet.use_simplified_condition_embedding:
+                        num_controlnet_images = controlnet_images.shape[2]
+                        controlnet_images = rearrange(controlnet_images, "b c f h w -> (b f) c h w")
+                        controlnet_images = vae.encode(controlnet_images * 2. - 1.).latent_dist.sample() * 0.18215
+                        controlnet_images = rearrange(controlnet_images, "(b f) c h w -> b c f h w", f=num_controlnet_images)
+
                     sample = validation_pipeline(
                         prompt=validation_batch['text'],
                         pose_embedding=plucker_embedding,
@@ -485,6 +529,8 @@ def main(name: str,
                         num_inference_steps=25,
                         guidance_scale=8.,
                         generator=generator,
+                        controlnet_images=controlnet_images,
+                        controlnet_image_index=[0],
                     ).videos[0]  # [3 f h w]
                     sample_gt = torch.cat([sample, (validation_batch['pixel_values'][0].permute(1, 0, 2, 3) + 1.0) / 2.0], dim=2)  # [3, f, 2h, w]
                     if 'clip_name' in validation_batch:
@@ -493,6 +539,8 @@ def main(name: str,
                         save_path = f"{output_dir}/samples/sample-{global_step}/{idx}.gif"
                     save_videos_grid(sample_gt[None, ...], save_path)
                     logger.info(f"Saved samples to {save_path}")
+
+                    if idx == 10: exit(0)
             if (global_step % logger_interval) == 0 or global_step == 0:
                 gpu_memory = torch.cuda.max_memory_allocated() / (1024 ** 3)
                 msg = f"Iter: {global_step}/{max_train_steps}, Loss: {loss.detach().item(): .4f}, " \
@@ -513,6 +561,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--launcher", type=str, choices=["pytorch", "slurm"], default="pytorch")
     parser.add_argument("--port", type=int)
+    parser.add_argument("--local_rank", type=int, default=0)
     args = parser.parse_args()
 
     name = Path(args.config).stem

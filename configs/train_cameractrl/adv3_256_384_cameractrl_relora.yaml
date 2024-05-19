@@ -5,7 +5,7 @@ unet_subfolder: "unet_webvidlora_v3"
 train_data:
   root_path:       "./RealEstate"
   sample_stride: 8
-  sample_n_frames: 12
+  sample_n_frames: 10
   relative_pose: true
   zero_t_first_frame: true
   sample_size: [256, 384]
@@ -19,7 +19,7 @@ validation_data:
   caption_json:   "test_captions.json"
   pose_mat:       "test.mat"
   sample_stride: 8
-  sample_n_frames: 12
+  sample_n_frames: 10
   relative_pose: true
   zero_t_first_frame: true
   sample_size: [256, 384]
@@ -42,6 +42,25 @@ unet_additional_kwargs:
     temporal_attention_dim_div         : 1
     zero_initialize                    : false
   num_epipolar_layers : [2, 2, 2, 2]
+
+# for sparse encoder
+controlnet_additional_kwargs:
+  set_noisy_sample_input_to_zero:     true
+  use_simplified_condition_embedding: true
+  conditioning_channels:              4
+
+  use_motion_module:         true
+  motion_module_resolutions: [1,2,4,8]
+  motion_module_mid_block:   false
+  motion_module_type:        "Vanilla"
+
+  motion_module_kwargs:
+    num_attention_heads:                8
+    num_transformer_block:              1
+    attention_block_types:              [ "Temporal_Self" ]
+    temporal_position_encoding:         true
+    temporal_position_encoding_max_len: 32
+    temporal_attention_dim_div:         1
 
 lora_rank: 2
 lora_scale: 1.0
