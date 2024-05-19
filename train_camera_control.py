@@ -513,6 +513,7 @@ if __name__ == "__main__":
     parser.add_argument("--config", type=str, required=True)
     parser.add_argument("--launcher", type=str, choices=["pytorch", "slurm"], default="pytorch")
     parser.add_argument("--port", type=int)
+    parser.add_argument("--local_rank", default=0)
     args = parser.parse_args()
 
     name = Path(args.config).stem
