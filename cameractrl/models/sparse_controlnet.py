@@ -551,7 +551,6 @@ class SparseControlNetModel(ModelMixin, ConfigMixin):
         down_block_res_samples = (sample,)
         for downsample_block in self.down_blocks:
             if hasattr(downsample_block, "has_cross_attention") and downsample_block.has_cross_attention:
-                print(f'sparsenet.py, sample {sample.shape}, temb {emb.shape}, encoder {encoder_hidden_states.shape}, mask {attention_mask}')
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
                     temb=emb,

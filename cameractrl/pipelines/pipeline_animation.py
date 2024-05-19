@@ -372,7 +372,6 @@ class AnimationPipeline(DiffusionPipeline, LoraLoaderMixin):
         single_model_length = video_length
         video_length = multidiff_total_steps * (video_length - multidiff_overlaps) + multidiff_overlaps
         num_channels_latents = self.unet.in_channels
-        print(f'pipeline: self.unet.in_channels {self.unet.in_channels}')
         latents = self.prepare_latents(
             batch_size * num_videos_per_prompt,
             num_channels_latents,
@@ -638,7 +637,6 @@ class CameraCtrlPipeline(AnimationPipeline):
         single_model_length = video_length
         video_length = multidiff_total_steps * (video_length - multidiff_overlaps) + multidiff_overlaps
         num_channels_latents = self.unet.in_channels
-        print(f'pipeline unet in c: {self.unet.in_channels}')
         latents = self.prepare_latents(
             batch_size * num_videos_per_prompt,
             num_channels_latents,
@@ -650,7 +648,6 @@ class CameraCtrlPipeline(AnimationPipeline):
             generator,
             latents,
         )                   # b c f h w
-        print(f'pipeline latents after prepare {latents.shape}')
         latents_dtype = latents.dtype
 
         # Prepare extra step kwargs.
@@ -728,9 +725,8 @@ class CameraCtrlPipeline(AnimationPipeline):
                             conditioning_scale=controlnet_conditioning_scale,
                             guess_mode=False, return_dict=False,
                         )
-                    print('pipeline.py: finish passing controlnet')
+
                     # predict the noise residual
-                    print(f'pipeline.py: pass {latent_model_input.shape} into unet')
                     noise_pred = self.unet(
                         latent_model_input,
                         t,

@@ -400,7 +400,6 @@ class CrossAttnDownBlock3D(nn.Module):
 
             else:
                 hidden_states = rearrange(hidden_states, "b c f h w -> (b f) c h w")
-                print(f'unet_blocks: pass {hidden_states.shape} into resnet')
                 hidden_states = resnet(hidden_states, temb_repeated)
                 hidden_states = rearrange(hidden_states, "(b f) c h w -> b c f h w", f=video_length)
 
