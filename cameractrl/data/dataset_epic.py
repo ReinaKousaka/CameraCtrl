@@ -305,8 +305,8 @@ class EpicKitchen(Dataset):
             start_frame = int(line[6])
             end_frame = int(line[7])
             narration = line[8]
-            if end_frame < start_frame + 20: continue
             videoid_to_timestamps[video_id].append((start_frame, end_frame))
+            if end_frame < start_frame + 20: continue
             self.datalist.append((video_id, start_frame, end_frame, narration))
             self.narration_to_videos[narration].append((video_id, start_frame, end_frame,))
 
