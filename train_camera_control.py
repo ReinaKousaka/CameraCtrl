@@ -172,17 +172,6 @@ def main(name: str,
                                 **attention_processor_kwargs)
     unet.config.num_attention_heads = 8
     unet.config.projection_class_embeddings_input_dim = None
-    # load v3_sd15_sparsectrl_rgb.ckpt
-    controlnet = SparseControlNetModel.from_unet(
-        unet,
-        controlnet_additional_kwargs=controlnet_additional_kwargs,
-    )
-    print(f"loading controlnet checkpoint from ./v3_sd15_sparsectrl_rgb.ckpt ...")
-    controlnet_state_dict = torch.load("v3_sd15_sparsectrl_rgb.ckpt", map_location="cpu")
-    controlnet_state_dict = controlnet_state_dict["controlnet"] if "controlnet" in controlnet_state_dict else controlnet_state_dict
-    controlnet_state_dict.pop("animatediff_config", "")
-    controlnet.load_state_dict(controlnet_state_dict)
-    controlnet.cuda()
 
     if lora_ckpt is not None:
         logger.info(f"Loading the image lora checkpoint from {lora_ckpt}")
@@ -221,6 +210,18 @@ def main(name: str,
     text_encoder.requires_grad_(False)
     unet.requires_grad_(False)
 
+    # load v3_sd15_sparsectrl_rgb.ckpt
+    controlnet = SparseControlNetModel.from_unet(
+        unet,
+        controlnet_additional_kwargs=controlnet_additional_kwargs,
+    )
+    print(f"loading controlnet checkpoint from ./v3_sd15_sparsectrl_rgb.ckpt ...")
+    controlnet_state_dict = torch.load("v3_sd15_sparsectrl_rgb.ckpt", map_location="cpu")
+    controlnet_state_dict = controlnet_state_dict["controlnet"] if "controlnet" in controlnet_state_dict else controlnet_state_dict
+    controlnet_state_dict.pop("animatediff_config", "")
+    controlnet.load_state_dict(controlnet_state_dict)
+    controlnet.cuda()
+
     spatial_attn_proc_modules = torch.nn.ModuleList([v for v in unet.attn_processors.values()
                                                      if not isinstance(v, (CustomizedAttnProcessor, AttnProcessor))])
     temporal_attn_proc_modules = torch.nn.ModuleList([v for v in unet.mm_attn_processors.values()
@@ -235,22 +236,25 @@ def main(name: str,
             logger.info(f'Setting the `requires_grad` of parameter {n} to false')
     pose_adaptor = PoseAdaptor(unet, pose_encoder)
 
-    encoder_trainable_params = list(filter(lambda p: p.requires_grad, pose_encoder.parameters()))
-    encoder_trainable_param_names = [p[0] for p in
-                                     filter(lambda p: p[1].requires_grad, pose_encoder.named_parameters())]
-    attention_trainable_params = [v for k, v in unet.named_parameters() if v.requires_grad and 'merge' in k and 'lora' not in k]
-    attention_trainable_param_names = [k for k, v in unet.named_parameters() if v.requires_grad and 'merge' in k and 'lora' not in k]
+    # encoder_trainable_params = list(filter(lambda p: p.requires_grad, pose_encoder.parameters()))
+    # encoder_trainable_param_names = [p[0] for p in
+    #                                  filter(lambda p: p[1].requires_grad, pose_encoder.named_parameters())]
+    # attention_trainable_params = [v for k, v in unet.named_parameters() if v.requires_grad and 'merge' in k and 'lora' not in k]
+    # attention_trainable_param_names = [k for k, v in unet.named_parameters() if v.requires_grad and 'merge' in k and 'lora' not in k]
 
-    trainable_params = encoder_trainable_params + attention_trainable_params
-    trainable_param_names = encoder_trainable_param_names + attention_trainable_param_names
+    trainable_params = [v for k, v in controlnet.named_parameters()]
+    trainable_param_names = [k for k, v in controlnet.named_parameters()]
+
+    # trainable_params = encoder_trainable_params + attention_trainable_params
+    # trainable_param_names = encoder_trainable_param_names + attention_trainable_param_names
 
     if is_main_process:
         logger.info(f"trainable parameter number: {len(trainable_params)}")
-        logger.info(f"encoder trainable number: {len(encoder_trainable_params)}")
-        logger.info(f"attention processor trainable number: {len(attention_trainable_params)}")
+        # logger.info(f"encoder trainable number: {len(encoder_trainable_params)}")
+        # logger.info(f"attention processor trainable number: {len(attention_trainable_params)}")
         logger.info(f"trainable parameter names: {trainable_param_names}")
-        logger.info(f"encoder trainable scale: {sum(p.numel() for p in encoder_trainable_params) / 1e6:.3f} M")
-        logger.info(f"attention processor trainable scale: {sum(p.numel() for p in attention_trainable_params) / 1e6:.3f} M")
+        # logger.info(f"encoder trainable scale: {sum(p.numel() for p in encoder_trainable_params) / 1e6:.3f} M")
+        # logger.info(f"attention processor trainable scale: {sum(p.numel() for p in attention_trainable_params) / 1e6:.3f} M")
         logger.info(f"trainable parameter scale: {sum(p.numel() for p in trainable_params) / 1e6:.3f} M")
 
     optimizer = torch.optim.AdamW(
@@ -480,16 +484,17 @@ def main(name: str,
                 state_dict = {
                     "epoch": epoch,
                     "global_step": global_step,
-                    "pose_encoder_state_dict": pose_adaptor.module.pose_encoder.state_dict(),
-                    "attention_processor_state_dict": {k: v for k, v in unet.state_dict().items()
-                                                       if k in attention_trainable_param_names},
+                    # "pose_encoder_state_dict": pose_adaptor.module.pose_encoder.state_dict(),
+                    # "attention_processor_state_dict": {k: v for k, v in unet.state_dict().items()
+                    #                                    if k in attention_trainable_param_names},
+                    "controlnet_state_dict": controlnet.state_dict(),
                     "optimizer_state_dict": optimizer.state_dict()
                 }
                 torch.save(state_dict, os.path.join(save_path, f"checkpoint-step-{global_step}.ckpt"))
                 logger.info(f"Saved state to {save_path} (global_step: {global_step})")
 
             # Periodically validation
-            if is_main_process and (
+            if is_main_process and global_step > 1 and (
                     (global_step + 1) % validation_steps == 0 or (global_step + 1) in validation_steps_tuple):
 
                 generator = torch.Generator(device=latents.device)

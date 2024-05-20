@@ -101,7 +101,7 @@ do_sanity_check: true
 
 max_train_epoch:      10
 max_train_steps:      -1
-validation_steps:       1000
+validation_steps:       500
 validation_steps_tuple: [2, ]
 
 learning_rate:    1.e-4

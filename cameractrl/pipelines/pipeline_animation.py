@@ -457,7 +457,7 @@ class CameraCtrlPipeline(AnimationPipeline):
             EulerAncestralDiscreteScheduler,
             DPMSolverMultistepScheduler],
         pose_encoder: CameraPoseEncoder,
-        controlnet: SparseControlNetModel,
+        controlnet: SparseControlNetModel = None,
     ):
 
         super().__init__(vae, text_encoder, tokenizer, unet, scheduler)

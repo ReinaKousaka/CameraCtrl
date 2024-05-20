@@ -679,7 +679,7 @@ class UNet3DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                     res_samples[sample_idx] = torch.cat([res_samples[sample_idx][:, :, :1], fused_sample], dim=2)
                     res_samples = tuple(res_samples)
 
-            down_block_res_samples += res_samples
+            down_block_res_samples += res_sampless
 
         # support controlnet
         if down_block_additional_residuals is not None:
