@@ -1,0 +1,88 @@
+resume_from: "output/cameractrl_model/epic-55K-tvf3/checkpoints/checkpoint-step-55000.ckpt"
+output_dir: "output/cameractrl_model"
+pretrained_model_path: "./stable-diffusion-v1-5"
+unet_subfolder: "unet_webvidlora_v3"
+
+train_data:
+  root:       "./Epic"
+  sample_stride: 4
+  num_frames: 10
+
+validation_data:
+  root:       "./Epic"
+  sample_stride: 4
+  num_frames: 10
+  is_valid: true
+
+
+unet_additional_kwargs:
+  use_motion_module              : true
+  motion_module_resolutions      : [ 1,2,4,8 ]
+  unet_use_cross_frame_attention : false
+  unet_use_temporal_attention    : false
+  motion_module_mid_block: false
+  motion_module_type: Vanilla
+  motion_module_kwargs:
+    num_attention_heads                : 8
+    num_transformer_block              : 1
+    attention_block_types              : [ "Temporal_Self", "Temporal_Self" ]
+    temporal_position_encoding         : true
+    temporal_position_encoding_max_len : 32
+    temporal_attention_dim_div         : 1
+    zero_initialize                    : false
+  num_epipolar_layers : [2,2,2,2]
+
+lora_rank: 2
+lora_scale: 1.0
+lora_ckpt: "./checkpoint-step-20000-lora-epic-new.ckpt"
+motion_module_ckpt: "./v3_sd15_mm.ckpt"
+
+pose_encoder_kwargs:
+  downscale_factor: 8
+  channels: [320, 640, 1280, 1280]
+  nums_rb: 2
+  cin: 384
+  ksize: 1
+  sk: true
+  use_conv: false
+  compression_factor: 1
+  temporal_attention_nhead: 8
+  attention_block_types: ["Temporal_Self", ]
+  temporal_position_encoding: true
+  temporal_position_encoding_max_len: 16
+attention_processor_kwargs:
+  add_spatial: false
+  spatial_attn_names: 'attn1'
+  add_temporal: true
+  temporal_attn_names: '0'
+  pose_feature_dimensions: [320, 640, 1280, 1280]
+  query_condition: true
+  key_value_condition: true
+  scale: 1.0
+noise_scheduler_kwargs:
+  num_train_timesteps: 1000
+  beta_start:          0.00085
+  beta_end:            0.012
+  beta_schedule:       "linear"
+  steps_offset:        1
+  clip_sample:         false
+
+do_sanity_check: true
+
+max_train_epoch:      500
+max_train_steps:      -1
+validation_steps:       1000
+validation_steps_tuple: [2, ]
+
+learning_rate:    1.e-4
+
+num_workers: 8
+train_batch_size: 1
+gradient_accumulation_steps: 4
+checkpointing_epochs: -1
+checkpointing_steps:  5000
+
+mixed_precision_training: false
+global_seed: 42
+logger_interval: 10
+
