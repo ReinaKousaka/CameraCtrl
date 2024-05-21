@@ -27,6 +27,7 @@ from transformers import CLIPTextModel, CLIPTokenizer, CLIPVisionModelWithProjec
 from einops import rearrange
 
 from cameractrl.data.dataset import RealEstate10KPose
+from cameractrl.data.dataset_epic import EpicKitchen
 from cameractrl.utils.util import setup_logger, format_time, save_videos_grid
 from cameractrl.pipelines.pipeline_animation import CameraCtrlPipeline
 from cameractrl.models.unet import UNet3DConditionModelPoseCond
@@ -300,7 +301,7 @@ def main(name: str,
 
     # Get the training dataset
     logger.info(f'Building training datasets')
-    train_dataset = RealEstate10KPose(**train_data)
+    train_dataset = EpicKitchen(**train_data)
     distributed_sampler = DistributedSampler(
         train_dataset,
         num_replicas=num_processes,
@@ -322,7 +323,7 @@ def main(name: str,
 
     # Get the validation dataset
     logger.info(f'Building validation datasets')
-    validation_dataset = RealEstate10KPose(**validation_data)
+    validation_dataset = EpicKitchen(**validation_data)
     VALIDATION_BATCH_SIZE = 1
     validation_dataloader = torch.utils.data.DataLoader(
         validation_dataset,
@@ -517,8 +518,8 @@ def main(name: str,
                     for b in range(batch_size):
                         k = torch.eye(3).float().to(
                             local_rank, non_blocking=True)
-                        k[0, 0] = intrinsics[b][0]
-                        k[1, 1] = intrinsics[b][1]
+                        k[0, 0] = intrinsics[b][0] / 456.0
+                        k[1, 1] = intrinsics[b][1] / 256.0
                         k[0, 2] = 0.5
                         k[1, 2] = 0.5
                         source_intrinsics = k
@@ -641,21 +642,22 @@ def main(name: str,
 
             # Periodically validation
             if is_main_process and (
-                    (global_step + 950) % validation_steps == 0 or (global_step + 950) in validation_steps_tuple):
+                    (global_step + 1) % validation_steps == 0 or (global_step + 1) in validation_steps_tuple):
 
                 generator = torch.Generator(device=latents.device)
                 generator.manual_seed(global_seed)
 
-                if isinstance(train_data, omegaconf.listconfig.ListConfig):
-                    height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else \
-                    train_data[0].sample_size
-                    width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else \
-                    train_data[0].sample_size
-                else:
-                    height = train_data.sample_size[0] if not isinstance(train_data.sample_size,
-                                                                         int) else train_data.sample_size
-                    width = train_data.sample_size[1] if not isinstance(train_data.sample_size,
-                                                                        int) else train_data.sample_size
+                # if isinstance(train_data, omegaconf.listconfig.ListConfig):
+                #     height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else \
+                #     train_data[0].sample_size
+                #     width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else \
+                #     train_data[0].sample_size
+                # else:
+                #     height = train_data.sample_size[0] if not isinstance(train_data.sample_size,
+                #                                                          int) else train_data.sample_size
+                #     width = train_data.sample_size[1] if not isinstance(train_data.sample_size,
+                #                                                         int) else train_data.sample_size
+                height, width = 256, 448
 
                 validation_data_iter = iter(validation_dataloader)
                 print(f'------ valid ------')
