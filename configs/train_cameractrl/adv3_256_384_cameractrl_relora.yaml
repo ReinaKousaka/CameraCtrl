@@ -3,29 +3,27 @@ pretrained_model_path: "./stable-diffusion-v1-5"
 unet_subfolder: "unet_webvidlora_v3"
 
 train_data:
-  root_path:       "/media/wei/fast/realstate"
+  root_path:       "./RealEstate"
   sample_stride: 8
-  sample_n_frames: 6
+  sample_n_frames: 12
   relative_pose: true
   zero_t_first_frame: true
   sample_size: [256, 384]
   rescale_fxy: true
-  shuffle_frames: true
   use_flip: true
 
 validation_data:
-  root_path:       "/media/wei/fast/realstate"
+  root_path:       "./RealEstate"
   frame_dir:      "./test"
   image_json:     "test.json"
   caption_json:   "test_captions.json"
   pose_mat:       "test.mat"
   sample_stride: 8
-  sample_n_frames: 6
+  sample_n_frames: 12
   relative_pose: true
   zero_t_first_frame: true
   sample_size: [256, 384]
   rescale_fxy: true
-  shuffle_frames: false
   use_flip: false
 
 unet_additional_kwargs:
@@ -43,7 +41,7 @@ unet_additional_kwargs:
     temporal_position_encoding_max_len : 32
     temporal_attention_dim_div         : 1
     zero_initialize                    : false
-  num_epipolar_layers : [1, 1, 1, 1]
+  num_epipolar_layers : [0,0,0,0]
 
 lora_rank: 2
 lora_scale: 1.0
@@ -91,11 +89,10 @@ learning_rate:    1.e-4
 
 num_workers: 8
 train_batch_size: 1
-gradient_accumulation_steps: 8
+gradient_accumulation_steps: 16
 checkpointing_epochs: -1
-checkpointing_steps:  2000
+checkpointing_steps:  5000
 
 mixed_precision_training: false
-global_seed: 42
+global_seed: 6
 logger_interval: 10
-

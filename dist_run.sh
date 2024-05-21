@@ -3,7 +3,7 @@
 set -x
 
 CONFIG=$1
-GPUS=$4
+GPUS=$2
 PT_SCRIPT=$3
 RANDOM_PORT=$((49152 + RANDOM % 16384))
 

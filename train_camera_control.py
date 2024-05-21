@@ -226,9 +226,9 @@ def main(name: str,
             logger.info(f'Setting the `requires_grad` of parameter {n} to false')
     pose_adaptor = PoseAdaptor(unet, pose_encoder)
 
-    for name, para in unet.named_parameters():
-        if 'epipolar' in name:
-            para.requires_grad = True
+    # for name, para in unet.named_parameters():
+    #     if 'epipolar' in name:
+    #         para.requires_grad = True
 
 
     encoder_trainable_params = list(filter(lambda p: p.requires_grad, pose_encoder.parameters()))
@@ -236,8 +236,11 @@ def main(name: str,
                                      filter(lambda p: p[1].requires_grad, pose_encoder.named_parameters())]
     attention_trainable_params = [v for k, v in unet.named_parameters() if v.requires_grad and 'merge' in k and 'lora' not in k]
     attention_trainable_param_names = [k for k, v in unet.named_parameters() if v.requires_grad and 'merge' in k and 'lora' not in k]
-    epipolar_trainable_params = [v for k, v in unet.named_parameters() if v.requires_grad and 'epipolar' in k]
-    epipolar_trainable_params_names = [k for k, v in unet.named_parameters() if v.requires_grad and 'epipolar' in k]
+    # epipolar_trainable_params = [v for k, v in unet.named_parameters() if v.requires_grad and 'epipolar' in k]
+    # epipolar_trainable_params_names = [k for k, v in unet.named_parameters() if v.requires_grad and 'epipolar' in k]
+    epipolar_trainable_params = []
+    epipolar_trainable_params_names = []
+
     trainable_params = encoder_trainable_params + attention_trainable_params + epipolar_trainable_params
     trainable_param_names = encoder_trainable_param_names + attention_trainable_param_names + epipolar_trainable_params_names
 
@@ -441,84 +444,13 @@ def main(name: str,
 
             # start_time = time.perf_counter()
             
-            def _calculate_attn_mask(intrinsics, extrinsics, batch_size):
-                """
-                intrinsics: B, 6
-                extrinsics: B, T, 4, 4
-                """
-                attn_masks = []
-                for s in range(3):
-                    w, h, t = latents.shape[4] // 2 ** (s + 1), latents.shape[3] // 2 ** (s + 1), latents.shape[2]
-                    xs = torch.linspace(0, 1, steps=w)
-                    ys = torch.linspace(0, 1, steps=h)
-                    grid = torch.stack(
-                        torch.meshgrid(xs, ys, indexing='xy'), dim=-1).float().to(
-                            local_rank, non_blocking=True)
-
-                    grid = rearrange(grid, "h w c  -> (h w) c")
-                    grid = grid.repeat(t, 1)
-                    attn_mask = []
-                    for b in range(batch_size):
-                        k = torch.eye(3).float().to(
-                            local_rank, non_blocking=True)
-                        k[0, 0] = intrinsics[b][0]
-                        k[1, 1] = intrinsics[b][1]
-                        k[0, 2] = 0.5
-                        k[1, 2] = 0.5
-                        source_intrinsics = k
-                        source_intrinsics = source_intrinsics[None].repeat_interleave(t * w * h, 0)
-
-                        source_extrinsics_all = []
-                        target_extrinsics_all = []
-                        for t1 in range(t):
-                            source_extrinsics = torch.inverse(extrinsics[b][t1].to(
-                                local_rank, non_blocking=True))
-                            source_extrinsics_all.append(source_extrinsics[None].repeat_interleave(w * h, 0))
-                            tmp_seq = []
-                            for t2 in range(t):
-                                target_extrinsics = torch.inverse(extrinsics[b][t2].to(
-                                    local_rank, non_blocking=True))
-                                tmp_seq.append(target_extrinsics[None])
-                            target_extrinsics_all.append(torch.cat(tmp_seq).repeat(w*h,1,1))
-
-                        source_extrinsics_all = torch.cat(source_extrinsics_all)
-                        target_extrinsics_all = torch.cat(target_extrinsics_all)
-                        origin, direction = get_world_rays(grid, source_extrinsics_all, source_intrinsics)
-                        origin = origin.repeat_interleave(t, 0)
-                        direction = direction.repeat_interleave(t, 0)
-                        source_intrinsics = source_intrinsics.repeat_interleave(t, 0)
-                        projection = project_rays(
-                                    origin, direction, target_extrinsics_all, source_intrinsics
-                                )
-
-                        attn_image = torch.zeros((3, h, w)).to(
-                            local_rank, non_blocking=True)
-
-                        attn_image = draw_attn(
-                            attn_image,
-                            projection["xy_min"],
-                            projection["xy_max"],
-                            (1, 1, 1),
-                            8 // 2 ** s,
-                            x_range=(0, 1),
-                            y_range=(0, 1),)
-                        attn_image = attn_image
-                        attn_image = rearrange(attn_image, '(t1 a t2) b-> (t1 a) (t2 b)', t1 =t, t2=t)
-                        attn_mask.append(attn_image)
-                    attn_mask = torch.stack(attn_mask)
-                    attn_masks.append(attn_mask.float())
-                attn_masks.append(attn_mask.float())
-                return attn_masks
-            
-            attn_masks = _calculate_attn_mask(batch['intrinsics'], batch['extrinsics'], bsz)
-
             with torch.cuda.amp.autocast(enabled=mixed_precision_training):
                 # print(attn_masks[-1].shape)
                 model_pred = pose_adaptor(noisy_latents,
                                           timesteps,
                                           encoder_hidden_states=encoder_hidden_states,
                                           pose_embedding=plucker_embedding,
-                                          attention_mask_epipolar=attn_masks)  # [b c f h w]
+                                          attention_mask_epipolar=None)  # [b c f h w]
 
                 # Get the target for loss depending on the prediction type
                 if noise_scheduler.config.prediction_type == "epsilon":
@@ -566,8 +498,8 @@ def main(name: str,
                     "pose_encoder_state_dict": pose_adaptor.module.pose_encoder.state_dict(),
                     "attention_processor_state_dict": {k: v for k, v in unet.state_dict().items()
                                                        if k in attention_trainable_param_names},
-                    "epipolar_layer_state_dict": {k: v for k, v in unet.state_dict().items()
-                                                  if k in epipolar_trainable_params_names},
+                    # "epipolar_layer_state_dict": {k: v for k, v in unet.state_dict().items()
+                    #                               if k in epipolar_trainable_params_names},
                     "optimizer_state_dict": optimizer.state_dict()
                 }
                 torch.save(state_dict, os.path.join(save_path, f"checkpoint-step-{global_step}.ckpt"))
@@ -598,8 +530,7 @@ def main(name: str,
                     plucker_embedding = rearrange(plucker_embedding, "b f c h w -> b c f h w")
                     intrinsics = validation_batch['intrinsics'].to(device=unet.device)
                     extrinsics = validation_batch['extrinsics'].to(device=unet.device)
-                    attention_mask = _calculate_attn_mask(intrinsics, extrinsics, VALIDATION_BATCH_SIZE)
-                    print(plucker_embedding.shape)
+                    attention_mask = None
 
                     test_pixel_values = validation_batch["pixel_values"][:, 0].to(local_rank) #1stframe
 
@@ -609,7 +540,6 @@ def main(name: str,
                         # latents = rearrange(latents, "(b f) c h w -> b c f h w", f=video_length)
                         test_condition_image_latents = test_condition_image_latents * 0.18215 #1stframe
                     # test_condition_image_latents = latents[:, 0].copy
-
 
 
 
