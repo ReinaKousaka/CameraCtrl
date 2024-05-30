@@ -206,6 +206,7 @@ def main(name: str,
     attention_processor_state_dict = pose_adaptor_checkpoint['attention_processor_state_dict']
     _, attn_proc_u = unet.load_state_dict(attention_processor_state_dict, strict=False)
     assert len(attn_proc_u) == 0
+    print(f"Loading done")
 
 
     def encode_image(pixel_values):
@@ -228,17 +229,12 @@ def main(name: str,
         return image_embeddings
 
 
-
-    print(f"Loading done")
-
     # Freeze vae, and text_encoder
     vae.requires_grad_(False)
     text_encoder.requires_grad_(False)
     # imageencoder
     image_encoder.requires_grad_(False)
     unet.requires_grad_(False)
-
-    # print(unet)
 
     spatial_attn_proc_modules = torch.nn.ModuleList([v for v in unet.attn_processors.values()
                                                      if not isinstance(v, (CustomizedAttnProcessor, AttnProcessor))])
@@ -301,7 +297,7 @@ def main(name: str,
 
     # Get the training dataset
     logger.info(f'Building training datasets')
-    train_dataset = EpicKitchen(**train_data)
+    train_dataset = RealEstate10KPose(**train_data)
     distributed_sampler = DistributedSampler(
         train_dataset,
         num_replicas=num_processes,
@@ -323,7 +319,7 @@ def main(name: str,
 
     # Get the validation dataset
     logger.info(f'Building validation datasets')
-    validation_dataset = EpicKitchen(**validation_data)
+    validation_dataset = RealEstate10KPose(**validation_data)
     VALIDATION_BATCH_SIZE = 1
     validation_dataloader = torch.utils.data.DataLoader(
         validation_dataset,
@@ -454,9 +450,6 @@ def main(name: str,
             with torch.no_grad(): # image_encoder
                 image_hidden_states = encode_image(pixel_values[:, 0]) # image_encoder
 
-
-
-
             with torch.no_grad():
                 pixel_values = rearrange(pixel_values, "b f c h w -> (b f) c h w")
                 latents = vae.encode(pixel_values).latent_dist.sample()
@@ -490,7 +483,6 @@ def main(name: str,
 
             # encoder_hidden_states = torch.zeros_like(encoder_hidden_states)
 
-
             # encoder_hidden_states = image_hidden_states
             # Predict the noise residual and compute loss
             # Mixed-precision training
@@ -518,8 +510,8 @@ def main(name: str,
                     for b in range(batch_size):
                         k = torch.eye(3).float().to(
                             local_rank, non_blocking=True)
-                        k[0, 0] = intrinsics[b][0] / 456.0
-                        k[1, 1] = intrinsics[b][1] / 256.0
+                        k[0, 0] = intrinsics[b][0]
+                        k[1, 1] = intrinsics[b][1]
                         k[0, 2] = 0.5
                         k[1, 2] = 0.5
                         source_intrinsics = k
@@ -573,7 +565,6 @@ def main(name: str,
                             local_rank, non_blocking=True)
 
             with torch.cuda.amp.autocast(enabled=mixed_precision_training):
-                # print(attn_masks[-1].shape)
                 model_pred = pose_adaptor(noisy_latents,
                                           timesteps,
                                           encoder_hidden_states=encoder_hidden_states,
@@ -647,17 +638,16 @@ def main(name: str,
                 generator = torch.Generator(device=latents.device)
                 generator.manual_seed(global_seed)
 
-                # if isinstance(train_data, omegaconf.listconfig.ListConfig):
-                #     height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else \
-                #     train_data[0].sample_size
-                #     width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else \
-                #     train_data[0].sample_size
-                # else:
-                #     height = train_data.sample_size[0] if not isinstance(train_data.sample_size,
-                #                                                          int) else train_data.sample_size
-                #     width = train_data.sample_size[1] if not isinstance(train_data.sample_size,
-                #                                                         int) else train_data.sample_size
-                height, width = 256, 448
+                if isinstance(train_data, omegaconf.listconfig.ListConfig):
+                    height = train_data[0].sample_size[0] if not isinstance(train_data[0].sample_size, int) else \
+                    train_data[0].sample_size
+                    width = train_data[0].sample_size[1] if not isinstance(train_data[0].sample_size, int) else \
+                    train_data[0].sample_size
+                else:
+                    height = train_data.sample_size[0] if not isinstance(train_data.sample_size,
+                                                                         int) else train_data.sample_size
+                    width = train_data.sample_size[1] if not isinstance(train_data.sample_size,
+                                                                        int) else train_data.sample_size
 
                 validation_data_iter = iter(validation_dataloader)
                 print(f'------ valid ------')
@@ -680,10 +670,6 @@ def main(name: str,
                     test_image_embedding = encode_image(test_pixel_values)
                     test_camera_embeddings = validation_batch['camera_embeddings'].to(
                         local_rank)
-
-                    # print(test_image_embedding.shape)
-
-
 
                     sample = validation_pipeline(
                         prompt=validation_batch['text'],
